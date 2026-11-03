@@ -1,0 +1,36 @@
+{
+  "name": "dsh-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "dsh-memory · 长期记忆插件：自动落盘、按线索回想、可溯源、会变淡。基于 dsh-hippocampus (MIT, © coner13) 改造。",
+  "license": "MIT",
+  "author": "based on coner13/dsh-hippocampus",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "cli.mjs",
+    "preflight.mjs",
+    "selftest.mjs",
+    "smoke.mjs",
+    "lib/*.mjs",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "config.example.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

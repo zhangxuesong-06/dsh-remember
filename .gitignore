@@ -1,0 +1,48 @@
+# ——— IDE ———
+.idea/
+.vscode/
+*.iml
+
+# ——— 上游参考仓库：它自己带 .git，不能当子模块提交 ———
+ref-hippocampus/
+
+# ——— 运行时数据：插件自己会写，绝不进仓库 ———
+memory/
+*.jsonl
+*.jsonl.*
+*.db
+*.sqlite
+diag.log
+*.log
+snapshot-*.json
+snapshot-*.md
+dsh-memory/*.txt
+
+# ——— 早期语料分析的产物 ———
+# 这些文件里含真实对话摘录和本机绝对路径，只留在本地当证据。
+report.md
+report.json
+candidates.md
+candidates.json
+eval-result.json
+eval.mjs
+ablation.json
+ablation.mjs
+ablation-chunk.json
+ablation-chunk.md
+ablate-chunk.mjs
+probe-report.json
+probe.mjs
+gen-candidates.mjs
+spike.mjs
+questions.json
+gs.txt
+ls.txt
+
+# ——— 依赖 ———
+node_modules/
+
+# ——— 系统 ———
+Thumbs.db
+.DS_Store
+desktop.ini

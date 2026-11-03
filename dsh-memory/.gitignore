@@ -1,0 +1,17 @@
+# ---- 用户自己的东西 ----
+config.json
+node_modules/
+package-lock.json
+
+# ---- 记忆数据：原话 / 段 / 锚，一条都不能进仓库 ----
+记忆数据/
+*.jsonl
+*.jsonl.*
+*.sqlite
+*.db
+
+# ---- 维护者本机文件 ----
+_denylist.txt
+工具/
+*.log
+*.bak

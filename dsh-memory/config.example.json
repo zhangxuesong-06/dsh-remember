@@ -1,0 +1,40 @@
+{
+  "_说明": [
+    "这份文件会被自动生成到 ~/.dsh/dsh-memory/config.json。",
+    "最省事的路：只填 workspaces 一个字段，让它跑起来。",
+    "enabled=false 或 workspaces 为空时，插件什么都不做。"
+  ],
+  "enabled": true,
+
+  "workspaces": [
+    "D:\\your-workspace"
+  ],
+
+  "_lines说明": "同一文件夹里住着不止一个身份时才需要 lines；一个人用就删掉这段。",
+  "lines": [],
+
+  "capture": true,
+  "backfillOnMount": true,
+  "includeArchived": false,
+
+  "perTurnPriming": true,
+  "primeMax": 3,
+  "primeRecentCooldown": 8,
+
+  "anchor": true,
+  "anchorQuotes": 4,
+  "anchorChars": 120,
+
+  "arrival": true,
+  "arrivalChars": 2400,
+
+  "facts": true,
+  "factMax": 8,
+
+  "recallMaxChars": 2200,
+
+  "_时间衰减说明": "t0 拐点（天）· alpha 尾巴厚度 · floor 地板。默认是标定过的，别随手改。",
+  "recency": { "t0": 0.25, "alpha": 0.8, "floor": 0 },
+
+  "meetingGapMs": 7200000
+}
