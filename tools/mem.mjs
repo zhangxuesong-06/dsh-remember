@@ -11,7 +11,7 @@
 //   node tools/mem.mjs stats
 //   node tools/mem.mjs pin <key> "文本"
 
-import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf } from './mem-core.mjs'
+import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc } from './mem-core.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
 
@@ -60,13 +60,29 @@ if (cmd === 'add') {
   const hits = recall(text, { n: Number(flags.n) || 5, ws: flags.ws || null, scope: flags.scope || null })
   if (hits.note) console.log(`（${hits.note}）`)
   if (hits.aliasHit && hits.aliasHit.length) console.log(`（别名命中：${hits.aliasHit.join(', ')}）`)
-  if (!hits.length) { console.log(`（没有相关的。库里 ${readAll().length} 条。）`); process.exit(0) }
+  if (hits.assocHit && hits.assocHit.length) console.log(`（联想命中：${hits.assocHit.join(', ')}）`)
+  if (!hits.length) { console.log(`（没有相关的。库里 ${readAll().length} 条。）`); if (hits.hint) console.log(hits.hint); process.exit(0) }
   for (const h of hits) console.log(fmt(h) + `  ~${h.score.toFixed(2)}`)
 } else if (cmd === 'trace') {
   const q = rest.join(' ')
   const hits = trace(q)
   if (!hits.length) { console.log('（按字没有这句。）'); process.exit(0) }
   for (const h of hits.slice(-10)) console.log(`${fmt(h)}  · ${h.attribution}`)
+} else if (cmd === 'assoc') {
+  const sub = rest[0]
+  if (sub === 'build') {
+    const m = buildAssocIndex()
+    console.log(`联想图：${m.terms} 个词 · ${m.edges} 条边 · 基于 ${m.docCount} 条`)
+  } else if (sub === 'show') {
+    const term = String(rest[1] || '').toLowerCase()
+    const nb = assocNeighbors(term)
+    if (nb === null) { console.log('（还没有联想图，先跑 assoc build）'); process.exit(0) }
+    if (!nb.length) { console.log(`（「${term}」没有联想词）`); process.exit(0) }
+    console.log(`${term} →`)
+    for (const [w, pmi, n] of nb) console.log(`  ${w}  pmi ${pmi} · 共现 ${n}`)
+  } else {
+    console.log('用法: assoc build | assoc show <词>')
+  }
 } else if (cmd === 'map') {
   console.log(map())
 } else if (cmd === 'brief') {

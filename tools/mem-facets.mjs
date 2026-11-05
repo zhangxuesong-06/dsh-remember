@@ -20,9 +20,9 @@ const STOP = new Set([
 ])
 
 const DOMAIN = [
-  ['build', /(代码|编译|报错|部署|配置|依赖|函数|接口|调试|安装|仓库|分支|提交|脚本|环境变量|端口|docker|git|npm|pip|python|node|异常|堆栈|插件|工具)/i],
-  ['research', /(论文|文献|实验|假设|思路|研究|验证|综述|方法|结论|对比|基线|复现|数据集|arxiv|消融|评测)/i],
-  ['study', /(复习|背|考试|知识点|搞懂|理解|笔记|练习|题目|错题|记忆曲线|回顾)/i],
+  ['build', /(代码|编译|报错|部署|配置|依赖|函数|接口|调试|安装|仓库|分支|提交|脚本|环境变量|端口|插件|工具|钩子|索引|字段|服务|进程|参数|版本|重构|实现|接入|安装包|写一个|改成|跑起来|落盘|注入|拦截|检索|召回|docker|git|npm|pip|python|node|sqlite|json|yaml|api|server|client|hook|plugin|section|context|token|schema|config|index|cache|log|build|deploy|commit|branch|repo|recall|trace|embedding)/i],
+  ['research', /(论文|文献|实验|假设|思路|研究|验证|综述|方法|结论|对比|基线|复现|数据集|arxiv|消融|评测|指标|分析|衡量|判断|本质|根因|证明|推断|拆开|层次|维度|区别|取舍|权衡|失效|权重|降权|淘汰|打分|命中率|标注|判定)/i],
+  ['study', /(复习|背|考试|知识点|搞懂|理解|笔记|练习|题目|错题|记忆曲线|回顾|学习)/i],
 ]
 
 const KIND = [
@@ -150,6 +150,20 @@ export function vocabFromAliases(aliases) {
     for (const x of (Array.isArray(v) ? v : [])) if (x) out.add(String(x).toLowerCase())
   }
   return [...out]
+}
+
+// 一条都没查到时给的建议。不是魔法，就是把下一步说清楚。
+export function suggestAlias(query, docs) {
+  const s = String(query || '')
+  const cjk = [...s.matchAll(/[\u4e00-\u9fff]{2,8}/g)].map((m) => m[0]).sort((a, b) => b.length - a.length)
+  const lat = [...s.matchAll(/[a-zA-Z][a-zA-Z0-9_.\-]{2,}/g)].map((m) => m[0]).sort((a, b) => b.length - a.length)
+  const cand = cjk[0] || lat[0]
+  if (!cand) return '换个说法再试，或者用 map 看看库里有哪些主题。'
+  const exists = (docs || []).some((d) => String(d.text).includes(cand))
+  if (exists) {
+    return `库里出现过「${cand}」，但没有直接命中。换个说法试试，或者用 map 看它在哪个主题下。`
+  }
+  return `库里没有「${cand}」这个词。要么换个说法，要么加个别名：alias ${cand} "同义词,同义词"`
 }
 
 export function expandQuery(query, aliases) {

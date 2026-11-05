@@ -160,10 +160,13 @@ export default Plugin.define({
               n: Number(input.n) || 5,
               scope: input.scope ? String(input.scope) : null,
             })
-            if (!hits.length) return { content: '（没有相关的。库里有 ' + readAll().length + ' 条。）' }
+            if (!hits.length) {
+              return { content: '（没有相关的。库里有 ' + readAll().length + ' 条。）' + (hits.hint ? '\n' + hits.hint : '') }
+            }
             const head = []
             if (hits.note) head.push(`（${hits.note}）`)
             if (hits.aliasHit && hits.aliasHit.length) head.push(`（别名命中：${hits.aliasHit.join(', ')}）`)
+            if (hits.assocHit && hits.assocHit.length) head.push(`（联想命中：${hits.assocHit.join(', ')}）`)
             return {
               content: [...head, ...hits.map((h) => `#${h.seq} ${dayOf(h.ts)} [${shortWs(h.ws)}] ${h.text}`)].join('\n\n'),
             }

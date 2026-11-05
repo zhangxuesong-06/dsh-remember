@@ -8,13 +8,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { facetsOf, parseScope, matchScope, expandQuery, buildMap, vocabFromAliases } from './mem-facets.mjs'
+import { facetsOf, parseScope, matchScope, expandQuery, buildMap, vocabFromAliases, suggestAlias } from './mem-facets.mjs'
+import { buildAssoc, expandAssoc, assocStats } from './mem-assoc.mjs'
 
 export const ROOT = process.env.OPENCODE_MEM_HOME || path.join(os.homedir(), '.opencode-mem')
 export const STREAM = path.join(ROOT, 'stream.jsonl')
 export const MARKS = path.join(ROOT, 'marks.jsonl')
 export const PINS = path.join(ROOT, 'pins.json')
 export const ALIASES = path.join(ROOT, 'aliases.json')
+export const ASSOC = path.join(ROOT, 'assoc.json')
 export const DIAG = path.join(ROOT, 'diag.log')
 
 export function ensure() {
@@ -172,12 +174,40 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
   }
   for (const w of extra) for (const t of new Set(tok(w))) add(t, 0.7)
 
+  // 联想扩展：共现推出来的关系，权重比别名低一档。
+  // 别名是「有人说过它们同义」，联想只是「老一起出现」——后者更容易错。
+  // 图过期了就现重建一次（小库），大库交给 assoc build 手动跑。
+  let assocDoc = readAssoc()
+  const stale = !assocDoc || Math.abs((assocDoc.meta && assocDoc.meta.docCount || 0) - docs.length)
+    > Math.max(10, Math.round(docs.length * 0.15))
+  if (stale && docs.length <= 3000) {
+    try { buildAssocIndex(); assocDoc = readAssoc() } catch {}
+  }
+  const assocHit = assocDoc ? expandAssoc(query, assocDoc.map) : { extra: [], hit: [] }
+  for (const w of assocHit.extra) for (const t of new Set(tok(w))) add(t, 0.35)
+
+  // 覆盖率：查询里的词，这条记录命中了几成。
+  // BM25 永远能返回点什么——「量子纠缠」也会因为「时间」两个字命中一条无关记录。
+  // 所以"空召回"几乎不存在，触发提示要靠覆盖率，不能靠 hits.length。
+  const qterms = [...new Set(tok(query))]
+  const hitCount = new Map()
+  for (const t of qterms) {
+    const a = post.get(t)
+    if (!a) continue
+    for (let i = 0; i < a.length; i += 2) hitCount.set(a[i], (hitCount.get(a[i]) || 0) + 1)
+  }
+  const coverage = (id) => (qterms.length ? (hitCount.get(id) || 0) / qterms.length : 0)
+
+  const minCoverage = 0.2
   const out = [...sc.entries()]
-    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now) }))
+    .filter(([i]) => coverage(i) >= minCoverage)
+    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now), coverage: +coverage(i).toFixed(2) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, n)
   if (scopeNote) out.note = scopeNote
   if (hit.length) out.aliasHit = hit
+  if (assocHit.hit.length) out.assocHit = assocHit.hit
+  if (!out.length) out.hint = suggestAlias(query, docs)
   return out
 }
 
@@ -185,6 +215,36 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
 export function map(opts = {}) {
   const vocab = vocabFromAliases(readAliases())
   return buildMap(readAll(), { ...opts, vocab })
+}
+
+// 联想图：从共现现算，存一份缓存。过期了就忽略，不阻塞查询。
+export function readAssoc() {
+  try {
+    const j = JSON.parse(fs.readFileSync(ASSOC, 'utf8'))
+    return j && j.map ? j : null
+  } catch { return null }
+}
+
+export function buildAssocIndex(opts = {}) {
+  const docs = readAll()
+  const vocab = vocabFromAliases(readAliases())
+  const map = buildAssoc(docs, { ...opts, vocab })
+  const meta = {
+    builtAt: Date.now(),
+    docCount: docs.length,
+    lastSeq: docs.length ? docs[docs.length - 1].seq : 0,
+    ...assocStats(map),
+  }
+  ensure()
+  fs.writeFileSync(ASSOC, JSON.stringify({ meta, map }), 'utf8')
+  return meta
+}
+
+export function assocNeighbors(term) {
+  const j = readAssoc()
+  if (!j) return null
+  const t = String(term || '').toLowerCase()
+  return j.map[t] || []
 }
 
 // 别名表：模型可以加，错了只是局部影响。
