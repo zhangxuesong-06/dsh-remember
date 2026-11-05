@@ -8,11 +8,12 @@
 // 数据在 ~/.opencode-mem/。工具是 mem_recall / mem_trace / mem_remember。
 
 import { Plugin } from '@opencode/plugin'
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const CORE = path.resolve(HERE, '../../../tools/mem-core.mjs')
+const CORE = path.resolve(HERE, '../../tools/mem-core.mjs')
 
 // 每个会话的临时状态。插件重启就丢，没关系——丢的只是去重表。
 const S = new Map()
@@ -53,7 +54,7 @@ export default Plugin.define({
       console.error('[self-memory] 载入 mem-core 失败：' + (e && e.message))
       return
     }
-    const { append, recall, trace, mark, readAll, readPins, diag, dayOf, map, addAlias } = core
+    const { append, recall, trace, mark, readAll, readPins, diag, dayOf, map, addAlias, appendTool } = core
     const ws = ctx.location && ctx.location.directory ? ctx.location.directory : ''
     diag(`plugin 载入 · ws=${ws}`)
 
@@ -136,6 +137,61 @@ export default Plugin.define({
         append({ who: 'system', kind: 'compaction', text: '上下文被压缩了一次', ws, sid: e.sessionID })
       }))
     } catch (e) { diag('挂 compaction 失败：' + (e && e.message)) }
+
+    // ——— ③b 工具调用：只收集，不进检索 ———
+    // 现在不做任何过滤和聚合——先攒四天，看清楚里面有什么再决定。
+    // fileOp 先打个标，方便以后切分（海马体的做法是直接丢掉文件操作）。
+    //
+    // 注：这里自己写文件，不走 core.appendTool——ESM 的模块缓存在服务进程里，
+    // 插件重载不会重新 import 依赖，core 的新导出拿不到。等下次重启服务再收敛。
+    const FILE_OPS = new Set([
+      'read', 'write', 'edit', 'patch', 'multiedit', 'multi_edit',
+      'grep', 'glob', 'list', 'ls', 'rg', 'str_replace_editor',
+    ])
+    const TOOLS_FILE = path.join(core.ROOT, 'tools.jsonl')
+    const clipJson = (v, max = 300) => {
+      let s = ''
+      try { s = typeof v === 'string' ? v : JSON.stringify(v) } catch { s = String(v) }
+      if (!s) return ''
+      return s.length > max ? s.slice(0, max) + '…' : s
+    }
+    const writeTool = (rec) => {
+      try {
+        fs.mkdirSync(core.ROOT, { recursive: true })
+        const row = {
+          ts: rec.ts || Date.now(),
+          ws: rec.ws || '',
+          sid: rec.sid || '',
+          tool: String(rec.tool || '?').slice(0, 40),
+          phase: rec.phase || 'call',
+          fileOp: !!rec.fileOp,
+        }
+        if (rec.args) row.args = String(rec.args).slice(0, 300)
+        if (rec.error) row.error = String(rec.error).slice(0, 300)
+        fs.appendFileSync(TOOLS_FILE, JSON.stringify(row) + '\n', 'utf8')
+      } catch (err) { diag('写 tools.jsonl 失败：' + (err && err.message)) }
+    }
+
+    try {
+      await ctx.tool.hook('execute.before', safe((e) => {
+        const tool = String(e.tool || e.name || '?')
+        writeTool({
+          ws, sid: e.sessionID || '', tool, phase: 'call',
+          fileOp: FILE_OPS.has(tool),
+          args: clipJson(e.input !== undefined ? e.input : e.args),
+        })
+      }))
+      await ctx.tool.hook('execute.after', safe((e) => {
+        if (e.status !== 'error') return
+        const tool = String(e.tool || e.name || '?')
+        const msg = e.error && (e.error.message || e.error)
+        writeTool({
+          ws, sid: e.sessionID || '', tool, phase: 'error',
+          fileOp: FILE_OPS.has(tool),
+          error: clipJson(msg),
+        })
+      }))
+    } catch (e) { diag('挂 tool 钩子失败：' + (e && e.message)) }
 
     // ——— ④ 工具 ———
     try {

@@ -5,7 +5,7 @@
 | 目录 | 是什么 | 装在哪 |
 |---|---|---|
 | `dsh-memory/` | DSH 插件：按工作区隔离，挂 `session/event` 自动落盘 | `~/.dsh/profiles/node_modules/` |
-| `.opencode/plugins/self-memory/` | OpenCode 插件：全局一个库，挂 `prompt` / `context` / `compaction` 钩子 | 放进项目的 `.opencode/plugins/` |
+| `plugin/self-memory/` | OpenCode 插件：全局一个库，挂 `prompt` / `context` / `compaction` 钩子 | 全局 `opencode.json` 的 `plugins` |
 | `tools/` | 存储与检索（CLI 和 OpenCode 插件共用） | — |
 
 两个插件都能**不靠模型自觉**地记录：消息发生时就落盘，不是等模型想起来调工具。
@@ -37,10 +37,20 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Workspace "D:\你的工�
 
 ## self-memory（OpenCode）
 
-把 `.opencode/plugins/self-memory/` 和 `tools/` 一起放进项目根目录，重载即可。
+**必须装在全局**，不然只有当前工作区会记。加进 `~/.config/opencode/opencode.json`：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["/absolute/path/to/plugin/self-memory"]
+}
+```
+
+插件按 location 实例化：每个工作区一份实例，`ctx.location.directory` 就是那个工作区。
+数据全部写进同一个 `~/.opencode-mem/`，靠 `ws` 标签区分。
 
 三个钩子：`prompt` 记用户消息，`context` 补记助手消息并注入醒来块，`compaction` 记一笔。
-三个工具：`recall` / `trace` / `remember`。
+三个工具：`recall` / `trace` / `remember`，外加 `map` 和 `alias`。
 
 数据在 `~/.opencode-mem/`，**全局一个库**，每条带 `ws` 标签——换文件夹不该等于换一个人。
 

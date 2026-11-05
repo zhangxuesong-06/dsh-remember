@@ -17,6 +17,7 @@ export const MARKS = path.join(ROOT, 'marks.jsonl')
 export const PINS = path.join(ROOT, 'pins.json')
 export const ALIASES = path.join(ROOT, 'aliases.json')
 export const ASSOC = path.join(ROOT, 'assoc.json')
+export const TOOLS = path.join(ROOT, 'tools.jsonl')
 export const DIAG = path.join(ROOT, 'diag.log')
 
 export function ensure() {
@@ -209,6 +210,46 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
   if (assocHit.hit.length) out.assocHit = assocHit.hit
   if (!out.length) out.hint = suggestAlias(query, docs)
   return out
+}
+
+// —— 原始工具调用：只收集，不建索引 ——
+// 和 stream.jsonl 分开：这边是冷的，不进检索，只留给以后聚合和按字查。
+export function appendTool(rec) {
+  ensure()
+  const row = {
+    ts: rec.ts || Date.now(),
+    ws: rec.ws || '',
+    sid: rec.sid || '',
+    tool: String(rec.tool || '?').slice(0, 40),
+    phase: rec.phase || 'call',
+    fileOp: !!rec.fileOp,
+  }
+  if (rec.args) row.args = String(rec.args).slice(0, 300)
+  if (rec.error) row.error = String(rec.error).slice(0, 300)
+  fs.appendFileSync(TOOLS, JSON.stringify(row) + '\n', 'utf8')
+  return row
+}
+
+export function readTools() {
+  try {
+    return fs.readFileSync(TOOLS, 'utf8').split(/\r?\n/).filter(Boolean)
+      .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+  } catch { return [] }
+}
+
+export function toolStats() {
+  const rows = readTools()
+  const byTool = {}
+  const byPhase = {}
+  let fileOps = 0
+  let bytes = 0
+  try { bytes = fs.statSync(TOOLS).size } catch {}
+  for (const r of rows) {
+    byTool[r.tool] = (byTool[r.tool] || 0) + 1
+    byPhase[r.phase] = (byPhase[r.phase] || 0) + 1
+    if (r.fileOp) fileOps += 1
+  }
+  return { total: rows.length, bytes, byTool, byPhase, fileOps }
 }
 
 // 记忆地图：从 facet 现算，只读。

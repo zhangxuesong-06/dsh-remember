@@ -1,6 +1,6 @@
 # 记忆项目 · AGENTS.md
 
-给 agent 做长期记忆。DSH 用的插件在 `dsh-memory/`；**我自己用的在 `.opencode/plugins/self-memory/`**。
+给 agent 做长期记忆。DSH 用的插件在 `dsh-memory/`；**我自己用的在 `plugin/self-memory/`**（装在全局 `~/.config/opencode/opencode.json`，所以所有工作区都会记）。
 
 ## 记忆是自动的
 
@@ -40,6 +40,8 @@ node tools/mem.mjs recall "分块多大"   # 按意思，返回原话
 node tools/mem.mjs recall "docker" --scope build/docker   # 先缩范围再查
 node tools/mem.mjs trace "扫码走局域网" # 按字，一字不差
 node tools/mem.mjs alias vmware "虚拟机,vm"   # 加同义词，跨过词面差异
+node tools/mem.mjs toolstats          # 工具调用收集了多少（原始，不进检索）
+node tools/mem.mjs assoc build        # 重建联想图
 ```
 
 会话里也有工具：`recall` / `trace` / `remember` / `map` / `alias`。
@@ -58,7 +60,7 @@ node tools/mem.mjs alias vmware "虚拟机,vm"   # 加同义词，跨过词面�
 ## 目录
 
 ```
-.opencode/plugins/self-memory/   我自己用的记忆插件（钩子 + 工具）
+plugin/self-memory/              我自己用的记忆插件（钩子 + 工具）
 tools/mem-core.mjs               存储与检索（CLI 和插件共用）
 tools/mem.mjs                    CLI
 dsh-memory/                      DSH 插件（fork 自 dsh-hippocampus, MIT）

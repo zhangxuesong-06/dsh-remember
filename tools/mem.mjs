@@ -11,7 +11,7 @@
 //   node tools/mem.mjs stats
 //   node tools/mem.mjs pin <key> "文本"
 
-import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc } from './mem-core.mjs'
+import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats } from './mem-core.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
 
@@ -83,6 +83,13 @@ if (cmd === 'add') {
   } else {
     console.log('用法: assoc build | assoc show <词>')
   }
+} else if (cmd === 'toolstats') {
+  const s = toolStats()
+  console.log(`工具调用 ${s.total} 条 · ${(s.bytes / 1024).toFixed(1)} KB · 文件操作 ${s.fileOps}`)
+  const byTool = Object.entries(s.byTool).sort((a, b) => b[1] - a[1]).slice(0, 12)
+  if (byTool.length) console.log('按工具: ' + byTool.map(([k, v]) => `${k} ${v}`).join(' · '))
+  const byPhase = Object.entries(s.byPhase)
+  if (byPhase.length) console.log('按阶段: ' + byPhase.map(([k, v]) => `${k} ${v}`).join(' · '))
 } else if (cmd === 'map') {
   console.log(map())
 } else if (cmd === 'brief') {
