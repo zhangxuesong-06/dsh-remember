@@ -8,11 +8,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { facetsOf, parseScope, matchScope, expandQuery, buildMap, vocabFromAliases } from './mem-facets.mjs'
 
 export const ROOT = process.env.OPENCODE_MEM_HOME || path.join(os.homedir(), '.opencode-mem')
 export const STREAM = path.join(ROOT, 'stream.jsonl')
 export const MARKS = path.join(ROOT, 'marks.jsonl')
 export const PINS = path.join(ROOT, 'pins.json')
+export const ALIASES = path.join(ROOT, 'aliases.json')
 export const DIAG = path.join(ROOT, 'diag.log')
 
 export function ensure() {
@@ -57,6 +59,19 @@ export function setPin(key, text) {
 export function append(rec) {
   ensure()
   const docs = readAll()
+  const text = String(rec.text || '').slice(0, 4000)
+  if (!text.trim()) return null
+
+  // 跨进程去重：插件重启会丢掉内存里的去重表，同一段话会被再记一遍。
+  // 只看最近 300 条、24 小时内——再往前的重复是真重复，不该吞。
+  const norm = text.replace(/\s+/g, ' ').trim().slice(0, 200)
+  const cutoff = Date.now() - 24 * 3600e3
+  for (let i = docs.length - 1; i >= 0 && i >= docs.length - 300; i--) {
+    const d = docs[i]
+    if (!d || d.ts < cutoff) break
+    if (String(d.text).replace(/\s+/g, ' ').trim().slice(0, 200) === norm) return null
+  }
+
   const seq = docs.length ? (docs[docs.length - 1].seq || 0) + 1 : 1
   const row = {
     seq,
@@ -65,9 +80,8 @@ export function append(rec) {
     kind: rec.kind || 'message',
     ws: rec.ws || '',
     sid: rec.sid || '',
-    text: String(rec.text || '').slice(0, 4000),
+    text,
   }
-  if (!row.text.trim()) return null
   fs.appendFileSync(STREAM, JSON.stringify(row) + '\n', 'utf8')
   return row
 }
@@ -102,11 +116,30 @@ function recency(ts, now = Date.now()) {
   return floor + (1 - floor) * Math.pow(1 + days / t0, -alpha)
 }
 
-export function recall(query, { n = 5, ws = null, now = Date.now() } = {}) {
+export function recall(query, { n = 5, ws = null, scope = null, now = Date.now() } = {}) {
   const docs = readAll()
   if (!docs.length) return []
-  const pool = ws ? docs.filter((d) => d.ws === ws) : docs
+  let pool = ws ? docs.filter((d) => d.ws === ws) : docs
   if (!pool.length) return []
+
+  // 别名表既用于扩展查询，也当实体词表——模型加词，代码匹配。
+  const aliases = readAliases()
+  const vocab = vocabFromAliases(aliases)
+
+  // scope 只缩范围，不改排序。范围里没东西就退回全库——宁可多给，也别假装没有。
+  const filter = parseScope(scope)
+  let scopeNote = ''
+  if (filter) {
+    const narrowed = pool.filter((d) => matchScope(facetsOf(d.text, vocab), filter))
+    if (narrowed.length) {
+      pool = narrowed
+    } else {
+      scopeNote = `scope ${scope} 里没有命中，已退回全库`
+    }
+  }
+
+  // 别名扩展：同义词表是模型能维护的那部分，错了也只是召回差一点。
+  const { extra, hit } = expandQuery(query, aliases)
 
   const post = new Map()
   const dl = []
@@ -137,10 +170,40 @@ export function recall(query, { n = 5, ws = null, now = Date.now() } = {}) {
       for (const k of post.keys()) if (k.length === 2 && k.includes(t)) add(k, 0.35)
     } else add(t, 1)
   }
-  return [...sc.entries()]
+  for (const w of extra) for (const t of new Set(tok(w))) add(t, 0.7)
+
+  const out = [...sc.entries()]
     .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, n)
+  if (scopeNote) out.note = scopeNote
+  if (hit.length) out.aliasHit = hit
+  return out
+}
+
+// 记忆地图：从 facet 现算，只读。
+export function map(opts = {}) {
+  const vocab = vocabFromAliases(readAliases())
+  return buildMap(readAll(), { ...opts, vocab })
+}
+
+// 别名表：模型可以加，错了只是局部影响。
+export function readAliases() {
+  try { return JSON.parse(fs.readFileSync(ALIASES, 'utf8')) } catch { return {} }
+}
+
+export function addAlias(term, synonyms) {
+  ensure()
+  const t = String(term || '').trim()
+  if (!t) return null
+  const list = (Array.isArray(synonyms) ? synonyms : String(synonyms || '').split(/[,，\s]+/))
+    .map((x) => String(x).trim()).filter(Boolean)
+  const a = readAliases()
+  const key = Object.keys(a).find((k) => k.toLowerCase() === t.toLowerCase()) || t
+  const set = new Set([...(a[key] || []), ...list])
+  a[key] = [...set]
+  fs.writeFileSync(ALIASES, JSON.stringify(a, null, 2), 'utf8')
+  return { key, synonyms: a[key] }
 }
 
 // 按字查：一字不差，返回归属。

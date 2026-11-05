@@ -2,14 +2,16 @@
 // mem —— 记忆的 CLI。真正的读写在 tools/mem-core.mjs，插件用的是同一份。
 //
 //   node tools/mem.mjs add "文本" [--kind decision] [--ws 路径]
-//   node tools/mem.mjs recall "一句话" [-n 5]
+//   node tools/mem.mjs recall "一句话" [-n 5] [--scope build/docker]
 //   node tools/mem.mjs trace "原话片段"
 //   node tools/mem.mjs remember "…" [--key 名字]
+//   node tools/mem.mjs map
+//   node tools/mem.mjs alias <词> <同义词,同义词>
 //   node tools/mem.mjs brief
 //   node tools/mem.mjs stats
 //   node tools/mem.mjs pin <key> "文本"
 
-import { append, mark, recall, trace, stats, readAll, readPins, readMarks, setPin, dayOf } from './mem-core.mjs'
+import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf } from './mem-core.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
 
@@ -18,6 +20,7 @@ function parseArgs(args) {
   const words = []
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith('--')) { flags[args[i].slice(2)] = args[i + 1]; i++ }
+    else if (args[i] === '-n') { flags.n = args[i + 1]; i++ }
     else words.push(args[i])
   }
   return { text: words.join(' ').trim(), flags }
@@ -45,13 +48,18 @@ if (cmd === 'add') {
   if (!key || !text) { console.error('用法: pin <key> "文本"'); process.exit(2) }
   setPin(key, text)
   console.log('钉住: ' + key)
+} else if (cmd === 'alias') {
+  const term = rest[0]
+  const syn = rest.slice(1).join(' ')
+  if (!term || !syn) { console.error('用法: alias <词> <同义词,同义词>'); process.exit(2) }
+  const r = addAlias(term, syn)
+  console.log(`${r.key} → ${r.synonyms.join(', ')}`)
 } else if (cmd === 'recall') {
-  const nIdx = rest.indexOf('-n')
-  const n = nIdx >= 0 ? Number(rest[nIdx + 1]) || 5 : 5
-  const wsIdx = rest.indexOf('--ws')
-  const ws = wsIdx >= 0 ? rest[wsIdx + 1] : null
-  const q = rest.filter((_, i) => i !== nIdx && i !== nIdx + 1 && i !== wsIdx && i !== wsIdx + 1).join(' ')
-  const hits = recall(q, { n, ws })
+  const { text, flags } = parseArgs(rest)
+  if (!text) { console.error('要查什么'); process.exit(2) }
+  const hits = recall(text, { n: Number(flags.n) || 5, ws: flags.ws || null, scope: flags.scope || null })
+  if (hits.note) console.log(`（${hits.note}）`)
+  if (hits.aliasHit && hits.aliasHit.length) console.log(`（别名命中：${hits.aliasHit.join(', ')}）`)
   if (!hits.length) { console.log(`（没有相关的。库里 ${readAll().length} 条。）`); process.exit(0) }
   for (const h of hits) console.log(fmt(h) + `  ~${h.score.toFixed(2)}`)
 } else if (cmd === 'trace') {
@@ -59,12 +67,15 @@ if (cmd === 'add') {
   const hits = trace(q)
   if (!hits.length) { console.log('（按字没有这句。）'); process.exit(0) }
   for (const h of hits.slice(-10)) console.log(`${fmt(h)}  · ${h.attribution}`)
+} else if (cmd === 'map') {
+  console.log(map())
 } else if (cmd === 'brief') {
   const docs = readAll()
   const pins = readPins()
   const marks = readMarks()
+  const aliases = readAliases()
   const pinLines = Object.entries(pins)
-  console.log(`# 记忆 · ${docs.length} 条 · ${pinLines.length} 钉住 · ${marks.length} 特意记下\n`)
+  console.log(`# 记忆 · ${docs.length} 条 · ${pinLines.length} 钉住 · ${marks.length} 特意记下 · ${Object.keys(aliases).length} 别名\n`)
   if (pinLines.length) {
     console.log('## 钉住')
     for (const [k, v] of pinLines) console.log(`- ${k}: ${v.text}`)
@@ -89,9 +100,11 @@ if (cmd === 'add') {
 } else {
   console.log(`用法:
   node tools/mem.mjs add "文本" [--kind decision] [--ws 路径]
-  node tools/mem.mjs recall "一句话" [-n 5]
+  node tools/mem.mjs recall "一句话" [-n 5] [--scope build/docker]
   node tools/mem.mjs trace "原话片段"
   node tools/mem.mjs remember "…" [--key 名字]
+  node tools/mem.mjs map
+  node tools/mem.mjs alias <词> <同义词,同义词>
   node tools/mem.mjs brief
   node tools/mem.mjs stats
   node tools/mem.mjs pin <key> "文本"`)

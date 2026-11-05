@@ -35,13 +35,19 @@ node tools/mem.mjs pin constraint "单人使用，本地运行"
 
 ```bash
 node tools/mem.mjs brief              # 钉住的 + 最近 8 条
+node tools/mem.mjs map                # 库里有哪些主题、各多少条
 node tools/mem.mjs recall "分块多大"   # 按意思，返回原话
+node tools/mem.mjs recall "docker" --scope build/docker   # 先缩范围再查
 node tools/mem.mjs trace "扫码走局域网" # 按字，一字不差
+node tools/mem.mjs alias vmware "虚拟机,vm"   # 加同义词，跨过词面差异
 ```
 
-会话里也有工具：`recall` / `trace` / `remember`（命名空间下可能显示为 `mem_recall`）。
+会话里也有工具：`recall` / `trace` / `remember` / `map` / `alias`。
 
 **分工**：`recall` 管意思，`trace` 管归属。「你是不是答应过我」只认 `trace`。
+
+**地图是视图，不是存储。** `map` 每次从 facet 现算，删了不影响任何数据；
+结构不可写，只有别名可写——别名错了是局部影响，结构错了是全局失明。
 
 ## 硬规则
 

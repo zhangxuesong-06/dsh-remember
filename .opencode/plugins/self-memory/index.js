@@ -53,7 +53,7 @@ export default Plugin.define({
       console.error('[self-memory] 载入 mem-core 失败：' + (e && e.message))
       return
     }
-    const { append, recall, trace, mark, readAll, readPins, diag, dayOf } = core
+    const { append, recall, trace, mark, readAll, readPins, diag, dayOf, map, addAlias } = core
     const ws = ctx.location && ctx.location.directory ? ctx.location.directory : ''
     diag(`plugin 载入 · ws=${ws}`)
 
@@ -150,16 +150,53 @@ export default Plugin.define({
             properties: {
               query: { type: 'string', description: '线索：一句话、一个名字、现在的处境' },
               n: { type: 'number', description: '要几条，默认 5' },
+              scope: { type: 'string', description: '缩小范围：build / research / study，或 build/docker 这种「域/实体」' },
             },
             required: ['query'],
             additionalProperties: false,
           },
           execute: async (input) => {
-            const hits = recall(String(input.query || ''), { n: Number(input.n) || 5 })
+            const hits = recall(String(input.query || ''), {
+              n: Number(input.n) || 5,
+              scope: input.scope ? String(input.scope) : null,
+            })
             if (!hits.length) return { content: '（没有相关的。库里有 ' + readAll().length + ' 条。）' }
+            const head = []
+            if (hits.note) head.push(`（${hits.note}）`)
+            if (hits.aliasHit && hits.aliasHit.length) head.push(`（别名命中：${hits.aliasHit.join(', ')}）`)
             return {
-              content: hits.map((h) => `#${h.seq} ${dayOf(h.ts)} [${shortWs(h.ws)}] ${h.text}`).join('\n\n'),
+              content: [...head, ...hits.map((h) => `#${h.seq} ${dayOf(h.ts)} [${shortWs(h.ws)}] ${h.text}`)].join('\n\n'),
             }
+          },
+        })
+
+        editor.add({
+          name: 'map',
+          description: '记忆地图：库里有哪些主题、各多少条、最近在聊什么。不知道该往哪找时先调它，再用 recall 带 scope 缩小范围。',
+          input: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+          execute: async () => ({ content: map() }),
+        })
+
+        editor.add({
+          name: 'alias',
+          description: '给一个词加同义词，让 recall 能跨过词面差异（比如 vmware = 虚拟机 = vm）。别名加错了只是某次召回差一点，不会影响别的。',
+          input: {
+            type: 'object',
+            properties: {
+              term: { type: 'string', description: '主词' },
+              synonyms: { type: 'string', description: '同义词，逗号分隔' },
+            },
+            required: ['term', 'synonyms'],
+            additionalProperties: false,
+          },
+          execute: async (input) => {
+            const r = addAlias(String(input.term || ''), String(input.synonyms || ''))
+            if (!r) return { content: '（没加，词是空的。）' }
+            return { content: `${r.key} → ${r.synonyms.join(', ')}` }
           },
         })
 
