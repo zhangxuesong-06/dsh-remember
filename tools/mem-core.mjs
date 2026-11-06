@@ -66,13 +66,19 @@ export function append(rec) {
   if (!text.trim()) return null
 
   // 跨进程去重：插件重启会丢掉内存里的去重表，同一段话会被再记一遍。
-  // 只看最近 300 条、24 小时内——再往前的重复是真重复，不该吞。
-  const norm = text.replace(/\s+/g, ' ').trim().slice(0, 200)
-  const cutoff = Date.now() - 24 * 3600e3
-  for (let i = docs.length - 1; i >= 0 && i >= docs.length - 300; i--) {
-    const d = docs[i]
-    if (!d || d.ts < cutoff) break
-    if (String(d.text).replace(/\s+/g, ' ').trim().slice(0, 200) === norm) return null
+  // 只对长文本做（「好的」「继续」本来就该重复记）；
+  // 窗口放到 2000 条 / 7 天——原来 300 条 / 24h 的窗口挡不住长会话里的历史重扫。
+  const norm = text.replace(/\s+/g, ' ').trim()
+  if (norm.length >= 80) {
+    const key = norm.slice(0, 200)
+    const cutoff = Date.now() - 7 * 24 * 3600e3
+    const from = Math.max(0, docs.length - 2000)
+    for (let i = docs.length - 1; i >= from; i--) {
+      const d = docs[i]
+      if (!d) continue
+      if (d.ts < cutoff) break
+      if (String(d.text).replace(/\s+/g, ' ').trim().slice(0, 200) === key) return null
+    }
   }
 
   const seq = docs.length ? (docs[docs.length - 1].seq || 0) + 1 : 1
@@ -250,6 +256,32 @@ export function toolStats() {
     if (r.fileOp) fileOps += 1
   }
   return { total: rows.length, bytes, byTool, byPhase, fileOps }
+}
+
+// 压实：把重复的长文本去掉。默认只算不改。
+// 这是唯一会改写 stream.jsonl 的操作——所以必须先备份，而且默认不执行。
+export function compact({ apply = false } = {}) {
+  const docs = readAll()
+  const seen = new Set()
+  const kept = []
+  let dropped = 0
+  for (const d of docs) {
+    const n = String(d.text).replace(/\s+/g, ' ').trim()
+    if (n.length >= 80) {
+      const key = n.slice(0, 200)
+      if (seen.has(key)) { dropped += 1; continue }
+      seen.add(key)
+    }
+    kept.push(d)
+  }
+  let backup = null
+  if (apply && dropped) {
+    ensure()
+    backup = STREAM + '.bak-' + Date.now()
+    fs.copyFileSync(STREAM, backup)
+    fs.writeFileSync(STREAM, kept.map((d) => JSON.stringify(d)).join('\n') + '\n', 'utf8')
+  }
+  return { total: docs.length, kept: kept.length, dropped, apply: !!(apply && dropped), backup }
 }
 
 // 记忆地图：从 facet 现算，只读。

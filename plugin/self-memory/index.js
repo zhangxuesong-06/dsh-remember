@@ -1,4 +1,4 @@
-// self-memory —— 给 OpenCode 用的长期记忆。
+﻿// self-memory —— 给 OpenCode 用的长期记忆。
 //
 // 和 dsh-memory 一个思路，但落点不同：
 //   记录不靠模型自觉 —— 挂 session 钩子，用户消息和助手消息都自动落盘。
@@ -72,7 +72,7 @@ export default Plugin.define({
         // prompt 钩子不是 exactly-once：重试会再跑一遍。短时间内同样的字只记一次。
         if (s.recent.has(key)) return
         s.recent.add(key)
-        if (s.recent.size > 50) s.recent.delete(s.recent.values().next().value)
+        if (s.recent.size > 5000) s.recent.delete(s.recent.values().next().value)
         s.cue = text
         append({ who: 'user', kind: 'message', text, ws, sid: e.sessionID })
       }))
@@ -100,7 +100,7 @@ export default Plugin.define({
           const key = 'a:' + text.slice(0, 80)
           if (s.recent.has(key)) continue
           s.recent.add(key)
-          if (s.recent.size > 50) s.recent.delete(s.recent.values().next().value)
+          if (s.recent.size > 5000) s.recent.delete(s.recent.values().next().value)
           append({ who: 'assistant', kind: 'message', text, ws, sid })
         }
 

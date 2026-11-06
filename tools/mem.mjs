@@ -11,7 +11,7 @@
 //   node tools/mem.mjs stats
 //   node tools/mem.mjs pin <key> "文本"
 
-import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats } from './mem-core.mjs'
+import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats, compact } from './mem-core.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
 
@@ -83,6 +83,12 @@ if (cmd === 'add') {
   } else {
     console.log('用法: assoc build | assoc show <词>')
   }
+} else if (cmd === 'compact') {
+  const apply = rest.includes('--apply')
+  const r = compact({ apply })
+  console.log(`总计 ${r.total} 条 · 保留 ${r.kept} · 重复 ${r.dropped}`)
+  if (r.apply) console.log(`已压实，备份：${r.backup}`)
+  else if (r.dropped) console.log('只是试算，没有改动。加 --apply 才真的写。')
 } else if (cmd === 'toolstats') {
   const s = toolStats()
   console.log(`工具调用 ${s.total} 条 · ${(s.bytes / 1024).toFixed(1)} KB · 文件操作 ${s.fileOps}`)
