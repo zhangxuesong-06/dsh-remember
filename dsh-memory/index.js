@@ -38,6 +38,7 @@ import { eventToRecords, setCaptureLog, setCaptureHuman } from './lib/capture.mj
 import { backfill } from './lib/backfill.mjs'
 import { anchorBlock, anchorCutoff, primingBlock, emotionCueBlock, recallBlock, traceBlock, factsBlock, arrivalBlock, dayOf, selfLines, strengthOf, sid8, lineOfDoc } from './lib/assemble.mjs'
 import { search } from './lib/retrieve.mjs'
+import { readBlob } from './lib/evidence.mjs'
 import { topicKey, tokenize } from './lib/tokenize.mjs'
 
 export const name = 'memory'
@@ -89,6 +90,7 @@ export function apply(ctx) {
   let cfgMtime = 0
   try { cfgMtime = statSync(CFG_PATH).mtimeMs } catch {}
   const ledgers = new Map()   // `${cwd}|${线名}` -> Ledger
+  const pendingTools = new Map() // ledger.dir -> Map<callId, {paths,before}>（同一进程内的调用/结果配对）
   const mounted = new Set()
   const held = new Set()      // 多线文件夹里没登记的会话（只喊一次）
   const settleTimers = new Map()
@@ -135,6 +137,12 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
     return l
   }
 
+  function pendingFor(l) {
+    let m = pendingTools.get(l.dir)
+    if (!m) { m = new Map(); pendingTools.set(l.dir, m) }
+    return m
+  }
+
   function holdNotice(sid, cwd) {
     if (held.has(sid)) return
     held.add(sid)
@@ -168,7 +176,7 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
         if (typeof seq === 'number' && l.seenSeq(sid, seq)) return
         // sid 和线名都要传进去：群消息的去重键按**线**隔离（不是按会话），
         // 否则同一条线开个新会话，同一批消息会在同一个库里再记一遍。
-        const recs = eventToRecords(event, { sid, line: line && line.name })
+        const recs = eventToRecords(event, { sid, line: line && line.name, root: l.dir, cwd, pending: pendingFor(l) })
         for (const r of recs) l.append({ ...r, sid })
         if (typeof seq === 'number') l.noteSeq(sid, seq)
         if (event && (event.type === 'turn/end' || event.type === 'session/title')) settleSoon(l)
@@ -462,6 +470,7 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
     push(() => agent.ctx.tools.register(traceTool(l, cfg, sid)))
     push(() => agent.ctx.tools.register(rememberTool(l, cfg)))
     push(() => agent.ctx.tools.register(statsTool(l, cfg)))
+    push(() => agent.ctx.tools.register(readTool(l, cfg)))
 
     try {
       ctx.effect(() => () => {
@@ -726,10 +735,12 @@ function statsTool(ledger, cfg) {
       const domainLine = [...byDomain.entries()]
         .sort((a, b) => b[1] - a[1])
         .map(([k, v]) => `${k} ${v}`).join(' · ')
+      const health = ledger.verify()
       const lines = [
         `记录 ${s.traces} 句 · ${s.episodes} 段 · ${(s.bytes / 1048576).toFixed(2)} MB`,
         `跨度 ${first} → ${last} · 今天新增 ${todayEps} 段`,
         domainLine ? `用途 ${domainLine}` : '',
+        `账本 ${health.status} · 证据 ${health.blobs} 个`,
         `库位置 ${s.dir}`,
       ].filter(Boolean)
       if (n && eps.length) {
@@ -745,6 +756,50 @@ function statsTool(ledger, cfg) {
 }
 
 // ——— 小工具 ———
+function readTool(ledger, cfg) {
+  return {
+    name: 'memory_read',
+    description:
+      '按行号或记录 ID 读取完整原文；也可以按 64 位证据哈希读取当时的工具输出/文件版本。\n'
+      + '长文本分段读，不要用 recall 的摘录冒充原文。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: '记录行号（从 0 开始）。' },
+        ref: { type: 'string', description: '记录 ID 或 64 位证据哈希。' },
+        offset: { type: 'number', description: '从第几个字符开始，默认 0。' },
+        limit: { type: 'number', description: '最多返回多少字符，默认 12000，最多 24000。' },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      render: (_args, v) => [{ type: 'text', text: String((v && v.text) || '') }],
+    },
+    async execute(args) {
+      const a = args || {}
+      let rec = null
+      const ref = a.ref ? String(a.ref).replace(/^#/, '') : ''
+      if (Number.isInteger(a.id)) rec = ledger.fullRecord(a.id)
+      else if (/^\d+$/.test(ref)) rec = ledger.fullRecord(Number(ref))
+      else if (/^[a-f0-9]{64}$/.test(ref)) {
+        try { return { text: readBlob(ledger.dir, ref).toString('utf8') } } catch (e) { return { text: '（证据读不出来：' + e.message + '）' } }
+      } else if (ref) {
+        rec = ledger.rows().find((r) => r.id === ref) || null
+      }
+      if (!rec) return { text: '（没有这条记录。）' }
+      const start = Math.max(0, Number(a.offset) || 0)
+      const size = Math.max(1, Math.min(24000, Number(a.limit) || 12000))
+      const text = String(rec.text || '')
+      const meta = { ...rec, text: undefined }
+      return {
+        text: JSON.stringify(meta, null, 2) + '\n' + text.slice(start, start + size)
+          + (start + size < text.length ? `\n（原文共 ${text.length} 字符；继续 offset=${start + size}）` : ''),
+      }
+    },
+  }
+}
+
 function spanHint(ledger) {
   if (!ledger.episodes.length) return ''
   const a = ledger.episodes[0]

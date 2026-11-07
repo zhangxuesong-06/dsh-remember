@@ -4,7 +4,7 @@
 // 关键取舍：**工具调用也要记**。那不是噪声——「我上次是这么查的」「这条命令报错了」
 // 是经历的一部分。人回忆一件事的时候，记得住自己当时做了什么。
 
-const MAX_TEXT = 6000
+import { artifactPaths, putBlob, snapshot } from './evidence.mjs'
 
 // 日志出口。capture 是**纯函数模块**，自己不写文件——写日志的路径、轮转、格式都在
 // index.js 那边有一套了，这里再实现一遍就是两套。index.js 挂载时把 diag() 传进来。
@@ -59,6 +59,24 @@ const FILE_OPS = new Set([
 
 // 工具的「调用」和「结果」是两个事件，结果里不带工具名，只能自己记一下
 const callNames = new Map()
+
+// 完整保存可见文本；只有病态大的输入才截断，并留下明确标记。
+const MAX_TEXT = 2 * 1024 * 1024
+
+function fullText(s) {
+  const t = String(s || '')
+  return t.length > MAX_TEXT ? t.slice(0, MAX_TEXT) + '…（超长截断）' : t
+}
+
+function parseArgs(raw) {
+  if (raw && typeof raw === 'object') return raw
+  try { return JSON.parse(String(raw || '{}')) } catch { return {} }
+}
+
+function eventId(ctx, event) {
+  if (typeof event.seq === 'number') return `${ctx.lineKey || ctx.sid || ''}:${event.seq}`
+  return `${ctx.lineKey || ctx.sid || ''}:${event.type}:${event.time || ''}`
+}
 
 function noteCall(callId, name) {
   if (!callId) return
@@ -115,8 +133,10 @@ export function eventToRecords(event, ctx) {
   // 同一条线开个新会话，键就变了——同一批群消息会在同一条线里再记一遍。
   // 那条线的库是同一个，结果就是预激活里端出两条一模一样的话。
   const lineKey = String((ctx && (ctx.line || ctx.sid)) || '')
+  const baseKey = eventId(ctx || {}, event)
   const out = []
   const data = event.data || {}
+  const sourceOf = (type) => ({ type, seq: event.seq ?? null, sid: (ctx && ctx.sid) || null })
 
   switch (event.type) {
     case 'user/message': {
@@ -157,11 +177,12 @@ export function eventToRecords(event, ctx) {
           // 键里缺 ts 时退回唤醒体的 event.time，**不能用 0**——0 是所有缺 ts 的消息
           // 共享的同一个键，会把「同前缀、都没 ts」的两条不同消息判成重复，安静地丢一条。
           if (seenRelay(`${lineKey}|${Number(it.ts) || ts}|${body.slice(0, 40)}`)) { dups += 1; continue }
-          // 注意：**不往记录里塞 gid / channel**。
-          // store.append() 的 d 对象只留 ts/who/sid/turn/text/tool/type 七个字段，
-          // capture 多返回的一律被切掉——写了也是白写，反而让人以为「已经落了」。
-          // 所以 gid 只进日志（下面那行），当验收时的定位键用。
-          out2.push({ who: 'he', ts: Number(it.ts) || ts, text: clip(body, MAX_TEXT), turn: null, type: event.type })
+          // gid 现在会随记录落库（store 保留 source 字段），重放和验收都能对上。
+          out2.push({
+            who: 'he', ts: Number(it.ts) || ts, text: fullText(body), turn: null, type: event.type,
+            messageID: it.id, eventKey: `${lineKey}:relay:${it.id}`,
+            source: { type: 'user/message', kind: 'relay', gid: it.id, channel: it.channel || null },
+          })
           ids.push(it.id)
         }
         // 验收取数面（2026-10-30 和维护者、另一个工作区定死的）：
@@ -188,7 +209,11 @@ export function eventToRecords(event, ctx) {
       if (text && isNoise(text)) return []
       const body = images ? `${text ? text + ' ' : ''}[图×${images}]` : text
       if (!body) return []
-      out.push({ who: 'he', ts, text: clip(body, MAX_TEXT), turn: null, type: event.type })
+      out.push({
+        who: 'he', ts, text: fullText(body), turn: null, type: event.type,
+        messageID: (data.message && data.message.id) || data.messageID || null,
+        eventKey: baseKey, source: sourceOf('user/message'),
+      })
       return out
     }
 
@@ -196,40 +221,86 @@ export function eventToRecords(event, ctx) {
       const msg = data.message || {}
       const { text } = blocksText(msg.content)
       if (!text) return []
-      out.push({ who: 'me', ts, text: clip(text, MAX_TEXT), turn: data.turn ?? null, type: event.type })
+      out.push({
+        who: 'me', ts, text: fullText(text), turn: data.turn ?? null, type: event.type,
+        messageID: msg.id || data.messageID || null,
+        turnID: data.turn !== undefined && data.turn !== null ? String(data.turn) : null,
+        eventKey: baseKey, source: sourceOf('assistant/message'),
+      })
       return out
     }
 
     case 'tool/call': {
       const name = data.name || '?'
       noteCall(data.callId, name)
-      const args = clip(String(data.arguments || ''), 150).replace(/\s+/g, ' ')
-      out.push({ who: 'act', ts, text: `我调了 ${name}：${args}`, tool: name, turn: data.turn ?? null, type: event.type })
+      const raw = String(data.arguments || '')
+      const args = parseArgs(raw)
+      const paths = ctx && ctx.root ? artifactPaths(name, args, ctx.cwd) : []
+      const before = paths.map((p) => snapshot(ctx.root, p))
+      if (ctx && ctx.pending && data.callId) ctx.pending.set(data.callId, { paths, before, name, ts })
+      let evidence = null
+      try { if (ctx && ctx.root) evidence = putBlob(ctx.root, raw) } catch (e) { _log('证据写入失败：' + e.message) }
+      const summary = clip(raw.replace(/\s+/g, ' '), 300)
+      out.push({
+        who: 'act', ts, text: `我调了 ${name}：${summary}`, tool: name, turn: data.turn ?? null,
+        type: event.type, callId: data.callId || null, eventKey: baseKey, evidence,
+        source: sourceOf('tool/call'),
+      })
       return out
     }
 
     // 工具结果：**只看它「查到了什么」**，不看它「写了什么」。
-    // 文件内容不进记忆（随时能重读，而且会把流撑成垃圾场），
+    // 文件内容不进检索（随时能重读，而且会把流撑成垃圾场），
     // 但搜索/命令/网页这类结果里，往往就是「我上次查到的东西」——那得留。
+    // 完整结果一律进 blobs/，需要时按哈希回读；索引里只留摘要。
     case 'tool/result': {
       const msg = data.message || {}
       const { text } = blocksText(msg.content)
-      if (!text) return []
-      if (msg.isError) {
-        out.push({ who: 'act', ts, text: clip(text, 240) + '（报错了）', turn: data.turn ?? null, type: event.type })
-        return out
+      const callId = msg.toolCallId || data.callId || null
+      const tool = String(data.name || msg.toolName || (callId ? nameOfCall(callId) : '') || '')
+      const pending = callId && ctx && ctx.pending ? ctx.pending.get(callId) : null
+      if (callId && ctx && ctx.pending) ctx.pending.delete(callId)
+      const paths = (pending && pending.paths) || (ctx && ctx.root ? artifactPaths(tool, data.input, ctx.cwd) : [])
+      const files = paths.map((p) => ({
+        path: p,
+        before: (pending && pending.before && pending.before.find((x) => x.path === p)) || { path: p, state: 'unknown' },
+        after: ctx && ctx.root ? snapshot(ctx.root, p) : { path: p, state: 'unknown' },
+      }))
+      let evidence = null
+      try { if (ctx && ctx.root) evidence = putBlob(ctx.root, text || '') } catch (e) { _log('证据写入失败：' + e.message) }
+      const body = text || '(无输出)'
+      let summary
+      if (msg.isError) summary = clip(body, 240) + '（报错了）'
+      else if (FILE_OPS.has(tool)) summary = `我处理了 ${tool}：结果已存为证据`
+      else summary = clip(body.replace(/\s+/g, ' ').trim(), 220)
+      if (!summary) return []
+      out.push({
+        who: 'act', ts, text: summary, tool, turn: data.turn ?? null, type: event.type,
+        callId, status: msg.isError ? 'error' : 'completed', evidence, files,
+        eventKey: baseKey, source: sourceOf('tool/result'),
+      })
+      if (!msg.isError) {
+        for (const file of files) {
+          const { before, after } = file
+          if (before && before.state === 'saved' && after.state === 'saved' && before.sha256 === after.sha256) continue
+          if (after.state !== 'saved' && !(after.state === 'missing' && before && before.state === 'saved')) continue
+          out.push({
+            who: 'act', ts, text: `${after.state === 'missing' ? '删除' : '写入'} ${file.path}；工具 ${tool} 已完成；版本 ${after.sha256 || 'missing'}`,
+            tool, turn: data.turn ?? null, type: 'artifact', artifact: true, path: file.path, versions: file,
+            eventKey: `${baseKey}:artifact:${file.path}`,
+            source: { type: 'tool.observation', callId, toolEventID: baseKey },
+          })
+        }
       }
-      const tool = String(data.name || msg.toolName || nameOfCall(data.message && data.message.toolCallId) || '')
-      if (FILE_OPS.has(tool)) return []
-      const flat = text.replace(/\s+/g, ' ').trim()
-      if (flat.length < 40) return []
-      out.push({ who: 'act', ts, text: clip(flat, 220), turn: data.turn ?? null, type: event.type })
       return out
     }
 
     case 'session/title': {
       if (!data.title) return []
-      out.push({ who: 'meta', ts, text: `这个对话叫「${data.title}」`, type: event.type })
+      out.push({
+        who: 'meta', ts, text: `这个对话叫「${data.title}」`, type: event.type,
+        eventKey: baseKey, source: sourceOf('session/title'),
+      })
       return out
     }
 

@@ -8,6 +8,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { createJournal } from './mem-journal.mjs'
+import { verifyBlobs, readBlob } from './mem-artifacts.mjs'
 import { facetsOf, parseScope, matchScope, expandQuery, buildMap, vocabFromAliases, suggestAlias } from './mem-facets.mjs'
 import { buildAssoc, expandAssoc, assocStats } from './mem-assoc.mjs'
 
@@ -19,6 +21,7 @@ export const ALIASES = path.join(ROOT, 'aliases.json')
 export const ASSOC = path.join(ROOT, 'assoc.json')
 export const TOOLS = path.join(ROOT, 'tools.jsonl')
 export const DIAG = path.join(ROOT, 'diag.log')
+export const journal = createJournal(ROOT)
 
 export function ensure() {
   fs.mkdirSync(ROOT, { recursive: true })
@@ -32,20 +35,11 @@ export function diag(msg) {
 }
 
 export function readAll() {
-  try {
-    const out = []
-    for (const line of fs.readFileSync(STREAM, 'utf8').split(/\r?\n/)) {
-      if (!line.trim()) continue
-      try { out.push(JSON.parse(line)) } catch {}
-    }
-    return out
-  } catch { return [] }
+  return journal.rows('stream.jsonl')
 }
 
 export function readMarks() {
-  try {
-    return fs.readFileSync(MARKS, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l))
-  } catch { return [] }
+  return journal.rows('marks.jsonl')
 }
 
 export function readPins() {
@@ -53,52 +47,28 @@ export function readPins() {
 }
 
 export function setPin(key, text) {
-  ensure()
-  const p = readPins()
-  p[key] = { text, ts: Date.now() }
-  fs.writeFileSync(PINS, JSON.stringify(p, null, 2), 'utf8')
+  journal.updateJson('pins.json', (pins) => ({ ...pins, [key]: { text, ts: Date.now() } }))
 }
 
 export function append(rec) {
-  ensure()
-  const docs = readAll()
-  const text = String(rec.text || '').slice(0, 4000)
+  const text = String(rec.text || '')
   if (!text.trim()) return null
-
-  // 跨进程去重：插件重启会丢掉内存里的去重表，同一段话会被再记一遍。
-  // 只对长文本做（「好的」「继续」本来就该重复记）；
-  // 窗口放到 2000 条 / 7 天——原来 300 条 / 24h 的窗口挡不住长会话里的历史重扫。
-  const norm = text.replace(/\s+/g, ' ').trim()
-  if (norm.length >= 80) {
-    const key = norm.slice(0, 200)
-    const cutoff = Date.now() - 7 * 24 * 3600e3
-    const from = Math.max(0, docs.length - 2000)
-    for (let i = docs.length - 1; i >= from; i--) {
-      const d = docs[i]
-      if (!d) continue
-      if (d.ts < cutoff) break
-      if (String(d.text).replace(/\s+/g, ' ').trim().slice(0, 200) === key) return null
-    }
-  }
-
-  const seq = docs.length ? (docs[docs.length - 1].seq || 0) + 1 : 1
+  // 去重依据来源事件，不再按开头 200 字吞掉不同的消息。
   const row = {
-    seq,
-    ts: rec.ts || Date.now(),
+    ...rec,
+    ts: rec.ts ?? Date.now(),
     who: rec.who || 'user',
     kind: rec.kind || 'message',
     ws: rec.ws || '',
     sid: rec.sid || '',
     text,
   }
-  fs.appendFileSync(STREAM, JSON.stringify(row) + '\n', 'utf8')
-  return row
+  return journal.append('stream.jsonl', row, { dedupeKey: rec.eventKey })
 }
 
 export function mark(text, key = null, ws = '') {
-  ensure()
-  const row = { ts: Date.now(), key, ws, text: String(text || '').slice(0, 2000) }
-  fs.appendFileSync(MARKS, JSON.stringify(row) + '\n', 'utf8')
+  const row = journal.append('marks.jsonl', { key, ws, text: String(text || '') })
+  append({ who: 'assistant', kind: 'note', text: row.text, ws, source: { markID: row.id }, eventKey: 'mark:' + row.id })
   return row
 }
 
@@ -205,10 +175,27 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
   }
   const coverage = (id) => (qterms.length ? (hitCount.get(id) || 0) / qterms.length : 0)
 
+  // 别名与原词占同一个覆盖位置；联想词不算直接证据。
+  const aliasGroups = Object.entries(aliases).map(([k, values]) => [k, ...(Array.isArray(values) ? values : [])])
+    .map((g) => g.map((x) => String(x).toLowerCase()).filter(Boolean))
+    .filter((g) => g.some((w) => String(query).toLowerCase().includes(w)))
+  const effectiveCoverage = (id) => {
+    if (!aliasGroups.length) return coverage(id)
+    const doc = String(pool[id].text).toLowerCase()
+    const present = new Set(qterms.filter((t) => post.get(t)?.some((v, i) => i % 2 === 0 && v === id)))
+    for (const group of aliasGroups) {
+      if (!group.some((w) => doc.includes(w))) continue
+      for (const word of group.filter((w) => String(query).toLowerCase().includes(w))) {
+        for (const t of tok(word)) if (qterms.includes(t)) present.add(t)
+      }
+    }
+    return qterms.length ? present.size / qterms.length : 0
+  }
+
   const minCoverage = 0.2
   const out = [...sc.entries()]
-    .filter(([i]) => coverage(i) >= minCoverage)
-    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now), coverage: +coverage(i).toFixed(2) }))
+    .filter(([i]) => effectiveCoverage(i) >= minCoverage)
+    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now), coverage: +effectiveCoverage(i).toFixed(2) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, n)
   if (scopeNote) out.note = scopeNote
@@ -221,26 +208,11 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
 // —— 原始工具调用：只收集，不建索引 ——
 // 和 stream.jsonl 分开：这边是冷的，不进检索，只留给以后聚合和按字查。
 export function appendTool(rec) {
-  ensure()
-  const row = {
-    ts: rec.ts || Date.now(),
-    ws: rec.ws || '',
-    sid: rec.sid || '',
-    tool: String(rec.tool || '?').slice(0, 40),
-    phase: rec.phase || 'call',
-    fileOp: !!rec.fileOp,
-  }
-  if (rec.args) row.args = String(rec.args).slice(0, 300)
-  if (rec.error) row.error = String(rec.error).slice(0, 300)
-  fs.appendFileSync(TOOLS, JSON.stringify(row) + '\n', 'utf8')
-  return row
+  return journal.append('tools.jsonl', rec, { dedupeKey: rec.eventKey })
 }
 
 export function readTools() {
-  try {
-    return fs.readFileSync(TOOLS, 'utf8').split(/\r?\n/).filter(Boolean)
-      .map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
-  } catch { return [] }
+  return journal.rows('tools.jsonl')
 }
 
 export function toolStats() {
@@ -258,9 +230,9 @@ export function toolStats() {
   return { total: rows.length, bytes, byTool, byPhase, fileOps }
 }
 
-// 压实：把重复的长文本去掉。默认只算不改。
-// 这是唯一会改写 stream.jsonl 的操作——所以必须先备份，而且默认不执行。
+// 只统计同会话的重复文本。原始账本不做物理去重。
 export function compact({ apply = false } = {}) {
+  if (apply) throw new Error('stream.jsonl 只追加；不再支持 compact --apply。重复只在派生视图里处理。')
   const docs = readAll()
   const seen = new Set()
   const kept = []
@@ -268,20 +240,54 @@ export function compact({ apply = false } = {}) {
   for (const d of docs) {
     const n = String(d.text).replace(/\s+/g, ' ').trim()
     if (n.length >= 80) {
-      const key = n.slice(0, 200)
+      const key = JSON.stringify([d.ws, d.sid, d.who, d.kind, n])
       if (seen.has(key)) { dropped += 1; continue }
       seen.add(key)
     }
     kept.push(d)
   }
-  let backup = null
-  if (apply && dropped) {
-    ensure()
-    backup = STREAM + '.bak-' + Date.now()
-    fs.copyFileSync(STREAM, backup)
-    fs.writeFileSync(STREAM, kept.map((d) => JSON.stringify(d)).join('\n') + '\n', 'utf8')
+  return { total: docs.length, kept: kept.length, dropped, apply: false, backup: null }
+}
+
+// 校验已接纳字节、文本指纹和引用的证据。历史基线不能证明接纳前的完整性。
+export function verify() {
+  const docs = readAll()
+  let result
+  try { result = journal.verify() } catch (error) {
+    result = { ok: false, status: 'BUSY', problems: [{ reason: error.message }], files: {} }
   }
-  return { total: docs.length, kept: kept.length, dropped, apply: !!(apply && dropped), backup }
+  const blobs = verifyBlobs(ROOT, [...docs, ...readTools()])
+  const problems = [...result.problems, ...blobs.problems]
+  const noHash = docs.filter((d) => !d.hash).length
+  return { ...result, ok: result.ok && !problems.length, status: problems.length ? 'BAD' : result.status,
+    total: docs.length, checked: docs.length - noHash, noHash, bad: problems.length, problems, blobs: blobs.checked }
+}
+
+export const syncIntegrity = () => journal.sync()
+export const unlockJournal = () => journal.unlock()
+export const evidence = (hash) => readBlob(ROOT, hash)
+export function getRecord(ref) {
+  const value = String(ref || '').replace(/^#/, '')
+  return readAll().find((r) => String(r.seq) === value || r.id === value)
+    || readTools().find((r) => r.id === value)
+    || journal.rows('episodes.jsonl').find((r) => r.id === value)
+    || null
+}
+
+// 一行体检。放计划任务里每天跑一次，出问题一眼看见。
+export function health({ report = false } = {}) {
+  const docs = readAll()
+  const pins = Object.keys(readPins()).length
+  const marks = readMarks().length
+  const t = toolStats()
+  const a = readAssoc()
+  const v = verify()
+  const artifacts = docs.filter((d) => d.kind === 'artifact').length
+  const day = new Date().toISOString().slice(0, 10)
+  const line = `[memory] ${day} total=${docs.length} pinned=${pins} marks=${marks} artifacts=${artifacts}`
+    + ` tools=${t.total} assoc=${a ? `${a.meta.terms}/${a.meta.edges}` : 'none'}`
+    + ` ledger=${v.status} problems=${v.bad} blobs=${v.blobs} noHash=${v.noHash}`
+  return report ? { line, ok: v.ok } : line
 }
 
 // 记忆地图：从 facet 现算，只读。
@@ -326,17 +332,18 @@ export function readAliases() {
 }
 
 export function addAlias(term, synonyms) {
-  ensure()
   const t = String(term || '').trim()
   if (!t) return null
   const list = (Array.isArray(synonyms) ? synonyms : String(synonyms || '').split(/[,，\s]+/))
     .map((x) => String(x).trim()).filter(Boolean)
-  const a = readAliases()
-  const key = Object.keys(a).find((k) => k.toLowerCase() === t.toLowerCase()) || t
-  const set = new Set([...(a[key] || []), ...list])
-  a[key] = [...set]
-  fs.writeFileSync(ALIASES, JSON.stringify(a, null, 2), 'utf8')
-  return { key, synonyms: a[key] }
+  let result
+  journal.updateJson('aliases.json', (a) => {
+    const key = Object.keys(a).find((k) => k.toLowerCase() === t.toLowerCase()) || t
+    a[key] = [...new Set([...(a[key] || []), ...list])]
+    result = { key, synonyms: a[key] }
+    return a
+  })
+  return result
 }
 
 // 按字查：一字不差，返回归属。
@@ -346,7 +353,7 @@ export function trace(query, { limit = 20 } = {}) {
   return readAll()
     .filter((d) => d.text.includes(q))
     .slice(-limit)
-    .map((d) => ({ ...d, attribution: d.who === 'user' ? '他说的' : d.who === 'assistant' ? '我说的' : '工具' }))
+    .map((d) => ({ ...d, attribution: d.who === 'user' ? '用户消息（请核对引用）' : d.who === 'assistant' ? '助手消息（请核对引用）' : '系统派生/工具观察（不是发言原话）' }))
 }
 
 export function stats() {

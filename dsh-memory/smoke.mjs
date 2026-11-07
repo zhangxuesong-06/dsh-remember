@@ -105,7 +105,7 @@ ok('有历史的会话挂了上下文块', A.contexts.length >= 2, A.contexts.ma
 ok('身份锚挂在系统提示区（不是对话历史）', A.sections.some((s) => s.name === 'hippocampus-self'))
 ok('归属规则也常驻系统提示区', A.sections.some((s) => s.name === 'hippocampus-attribution' && /先分清归属/.test(s.text)))
 ok('锚不再往历史里追加', !A.contexts.some((c) => c.name === 'hippocampus-anchor'))
-ok('挂了四个工具', A.tools.length === 4, A.tools.map((t) => t.name).join(','))
+ok('挂了五个工具', A.tools.length === 5, A.tools.map((t) => t.name).join(','))
 ok('有历史 → 不给「到达」', !A.contexts.some((c) => c.name === 'hippocampus-arrival'))
 ok('新会话 → 给「到达」', B.contexts.some((c) => c.name === 'hippocampus-arrival'))
 ok('捕获监听挂上了', listeners.has('session/event'))

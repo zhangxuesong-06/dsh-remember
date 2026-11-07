@@ -11,6 +11,11 @@
 //   node cli.mjs arrive  <工作区目录>
 //   node cli.mjs dump    <工作区目录> [n]     看最近 n 条原始记录
 //   node cli.mjs audit   <工作区目录>         体检：每个会话多带多少运行时上下文、压缩过几次
+//   node cli.mjs verify  <工作区目录>         校验已接纳字节、正文指纹和证据
+//   node cli.mjs health  <工作区目录>         一行体检
+//   node cli.mjs sync    <工作区目录>         检查后接纳历史基线/合法尾部
+//   node cli.mjs replay  <工作区目录>         从工具结果重建缺失的产物索引
+//   node cli.mjs show    <工作区目录> <行号|ID|证据哈希>
 //   node cli.mjs lines   [add <线名> <工作区> <会话id> | join <线名> <会话id>]
 
 import { Ledger } from './lib/store.mjs'
@@ -18,6 +23,7 @@ import { workspaceDir, loadCfg, DEFAULT_CFG, saveCfg } from './lib/config.mjs'
 import { backfill } from './lib/backfill.mjs'
 import { anchorBlock, primingBlock, recallBlock, traceBlock, arrivalBlock, dayOf } from './lib/assemble.mjs'
 import { search, priming } from './lib/retrieve.mjs'
+import { readBlob } from './lib/evidence.mjs'
 
 const [cmd, cwd, ...rest] = process.argv.slice(2)
 if (!cmd || !cwd) {
@@ -237,36 +243,69 @@ switch (cmd) {
     break
   }
 
-  // 清掉「同一个人短时间内说了两遍一模一样的话」——插件重装时会撞出来。
-  // **只动他/我说的话**：动手（工具调用）重复多半是真的又跑了一遍，删了就是篡改记忆。
-  // 这是唯一一次改写流的机会，所以先备份，再顺手让索引作废重建。
+  // 校验：已接纳字节、正文指纹、证据 blob。异常退出码 1。
+  case 'verify': {
+    const v = ledger.verify()
+    console.log(`ledger=${v.status} · 记录 ${ledger.docs.length} · 证据 ${v.blobs} · 老记录无指纹 ${v.noHash} · 异常 ${v.problems.length}`)
+    for (const p of v.problems.slice(0, 10)) console.log(JSON.stringify(p))
+    if (!v.ok) {
+      if (v.pending) console.log('有未接纳的尾部；确认来源后用 sync。sync 不会修复损坏字节。')
+      process.exitCode = 1
+    }
+    break
+  }
+
+  case 'health': {
+    const h = ledger.health()
+    console.log(`[memory] ${dayOf(Date.now())} 原话 ${h.traces} · 动作 ${h.acts} · 段 ${h.episodes} · ${(h.bytes / 1024).toFixed(1)} KB · 记下 ${h.marks}`)
+    console.log(`账本 ${h.ledger} · 异常 ${h.problems} · 证据 ${h.blobs} 个 · 老记录无指纹 ${h.noHash} · ${h.dir}`)
+    if (h.ledger !== 'OK') process.exitCode = 1
+    break
+  }
+
+  case 'sync': {
+    const v = ledger.sync()
+    console.log(`已接纳：ledger=${v.status} · 记录 ${ledger.docs.length}`)
+    break
+  }
+
+  case 'replay': {
+    console.log(`重建 ${ledger.replay()} 条产物索引（重复执行不会重复写）`)
+    break
+  }
+
+  case 'show': {
+    const ref = String(rest[0] || '').replace(/^#/, '')
+    if (!ref) { console.log('要给行号、记录 ID 或 64 位证据哈希'); break }
+    if (/^[a-f0-9]{64}$/.test(ref)) {
+      try { console.log(readBlob(ledger.dir, ref).toString('utf8')) } catch (e) { console.log('（证据读不出来：' + e.message + '）') }
+      break
+    }
+    const rec = /^\d+$/.test(ref) ? ledger.fullRecord(Number(ref)) : ledger.rows().find((r) => r.id === ref)
+    if (!rec) { console.log('（没有这条记录）'); break }
+    console.log(JSON.stringify({ ...rec, text: undefined }, null, 2))
+    console.log(String(rec.text || ''))
+    break
+  }
+
+  // 只做试算。原始账本只追加——去重会改变“当时到底发生过什么”，
+  // 和 OpenCode 那边禁用 compact --apply 是同一个理由。
   case 'dedup': {
-    const { readFileSync, writeFileSync, copyFileSync, existsSync, unlinkSync } = await import('node:fs')
-    const { join } = await import('node:path')
-    const p = join(dir, 'stream.jsonl')
-    if (!existsSync(p)) { console.log('（没有流）'); break }
-    const lines = readFileSync(p, 'utf8').split('\n').filter(Boolean)
+    const rows = ledger.rows()
     const seen = new Map()
-    const keep = []
     let removed = 0
-    for (const ln of lines) {
-      let d
-      try { d = JSON.parse(ln) } catch { keep.push(ln); continue }
-      if (d.who !== 'he' && d.who !== 'me') { keep.push(ln); continue }
+    for (const d of rows) {
+      if (d.who !== 'he' && d.who !== 'me') continue
       const t = String(d.text || '')
       const fp = `${d.who}|${d.sid || ''}|${t.length}|${t.slice(0, 48)}|${t.slice(-24)}`
       const win = t.length >= 12 ? 10 * 60 * 1000 : 60 * 1000
       const prev = seen.get(fp)
       if (prev !== undefined && Math.abs((d.ts || 0) - prev) < win) { removed += 1; continue }
       seen.set(fp, d.ts || 0)
-      keep.push(ln)
     }
-    if (!removed) { console.log('没有重复，不用动'); break }
-    copyFileSync(p, p + '.bak')
-    writeFileSync(p, keep.join('\n') + '\n', 'utf8')
-    const sp = join(dir, 'state.json')
-    if (existsSync(sp)) unlinkSync(sp)
-    console.log(`去掉 ${removed} 条重复的「他/我」发言（备份在 stream.jsonl.bak）。动手记录一条没动。索引会在下次打开时重建。`)
+    console.log(removed
+      ? `试算：有 ${removed} 条「他/我」发言落在重复窗口里。原始账本只追加，不执行改写。`
+      : '没有落在重复窗口里的发言，不用动。')
     break
   }
 

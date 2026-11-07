@@ -11,7 +11,10 @@
 //   node tools/mem.mjs stats
 //   node tools/mem.mjs pin <key> "文本"
 
-import { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats, compact } from './mem-core.mjs'
+import * as core from './mem-core.mjs'
+import { createCapture } from './mem-capture.mjs'
+import { memoryPage } from './mem-context.mjs'
+const { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats, compact, verify, health } = core
 
 const [cmd, ...rest] = process.argv.slice(2)
 
@@ -83,12 +86,36 @@ if (cmd === 'add') {
   } else {
     console.log('用法: assoc build | assoc show <词>')
   }
+} else if (cmd === 'verify') {
+  const v = verify()
+  console.log(`ledger=${v.status} 总计 ${v.total} · 已校验 ${v.checked} · 老记录无指纹 ${v.noHash} · blobs ${v.blobs} · 异常 ${v.bad}`)
+  if (!v.ok) {
+    for (const p of v.problems.slice(0, 10)) console.log(JSON.stringify(p))
+    if (v.pending) console.log('有未纳入检查点的记录；确认来源后用 sync 接纳。sync 不会修复损坏字节。')
+    process.exitCode = 1
+  }
+} else if (cmd === 'sync') {
+  console.log(JSON.stringify(core.syncIntegrity(), null, 2))
+} else if (cmd === 'unlock') {
+  console.log(core.unlockJournal() ? '已释放死亡进程留下的锁' : '没有锁')
+} else if (cmd === 'replay') {
+  createCapture(core, '').replay()
+  console.log('已从持久化事件重放派生记录（按来源 ID 去重）')
+} else if (cmd === 'show') {
+  const { text, flags } = parseArgs(rest)
+  let row = core.getRecord(text)
+  if (!row && /^[a-f0-9]{64}$/.test(text)) row = { id: text, text: core.evidence(text).toString('utf8') }
+  console.log(memoryPage(row, flags))
+} else if (cmd === 'health') {
+  const result = health({ report: true })
+  console.log(result.line)
+  if (!result.ok) process.exitCode = 1
 } else if (cmd === 'compact') {
   const apply = rest.includes('--apply')
   const r = compact({ apply })
   console.log(`总计 ${r.total} 条 · 保留 ${r.kept} · 重复 ${r.dropped}`)
   if (r.apply) console.log(`已压实，备份：${r.backup}`)
-  else if (r.dropped) console.log('只是试算，没有改动。加 --apply 才真的写。')
+  else if (r.dropped) console.log('只是同会话重复文本统计；保留原始账本，不支持 --apply。')
 } else if (cmd === 'toolstats') {
   const s = toolStats()
   console.log(`工具调用 ${s.total} 条 · ${(s.bytes / 1024).toFixed(1)} KB · 文件操作 ${s.fileOps}`)
@@ -136,5 +163,10 @@ if (cmd === 'add') {
   node tools/mem.mjs alias <词> <同义词,同义词>
   node tools/mem.mjs brief
   node tools/mem.mjs stats
+  node tools/mem.mjs show <编号|ID|blob哈希> [--offset 0] [--limit 12000]
+  node tools/mem.mjs verify | health | toolstats
+  node tools/mem.mjs sync       # 检查后接纳历史基线/合法未提交尾部，不修坏字节
+  node tools/mem.mjs replay     # 从持久事件重建缺失的派生记录
+  node tools/mem.mjs unlock     # 仅释放已死亡写入进程的锁
   node tools/mem.mjs pin <key> "文本"`)
 }

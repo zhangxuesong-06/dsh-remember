@@ -16,6 +16,7 @@ import {
 import { join } from 'node:path'
 import { termFreq, headline, tokenize } from './tokenize.mjs'
 import { episodeSalience, isClosing, isTransition, domainOf } from './signal.mjs'
+import { createIntegrity, sha256, verifyBlobs, scan } from './evidence.mjs'
 
 // 切段规则一改就得加这个号：让旧索引作废，重新切一遍。
 // 第 4 版：段带上了 sid（哪场对话），预激活才能排除「当前这场」。
@@ -43,6 +44,8 @@ export class Ledger {
     // 序号账本单独放：它是「事实」不是缓存。
     // 混在 state.json 里的话，索引一作废、序号也跟着忘，回填就会把旧会话重倒一遍。
     this.seqsPath = join(dir, 'seqs.json')
+    this.integrity = createIntegrity(dir, ['stream.jsonl', 'marks.jsonl'])
+    this._eventKeys = new Set()
 
     this.docs = []            // 按行号索引
     this.postings = new Map() // term -> [docId, tf, docId, tf, ...]
@@ -144,6 +147,7 @@ export class Ledger {
       if (!line.trim()) { this.docs.push(null); continue }
       let d
       try { d = JSON.parse(line) } catch { this.docs.push(null); continue }
+      if (d && d.eventKey) this._eventKeys.add(d.eventKey)
       this._indexDoc(d, start, bytes)
     }
     // 拿流尾巴把「最近说过什么」预热一遍：
@@ -165,6 +169,9 @@ export class Ledger {
     this.docs.push({
       who: d.who || null, ts: d.ts || 0, sid: d.sid || null,
       turn: d.turn ?? null, tool: d.tool || null, text, off, bytes, type: d.type || null,
+      id: d.id || null, eventKey: d.eventKey || null, messageID: d.messageID || null,
+      turnID: d.turnID || null, hash: d.hash || null, evidence: d.evidence || null,
+      versions: d.versions || null, status: d.status || null, artifact: !!d.artifact,
     })
     let len = 0
     for (const [term, tf] of termFreq(text)) {
@@ -187,12 +194,14 @@ export class Ledger {
   append(rec, opts = {}) {
     const text = String(rec.text || '')
     if (!text) return -1
+    // 来源事件 ID 优先：同一事件重放多少次都只落一条。
+    if (rec.eventKey && this._eventKeys.has(rec.eventKey)) return -1
 
     // 只有「说的话」才去重，动手不去重。
     // 同一句工具调用重复出现，多半是真的又跑了一遍（重试、复测）——
     // 那是经历，删掉就是让记忆说谎。
     const speech = rec.who === 'he' || rec.who === 'me'
-    const dedupe = opts.dedupe !== false
+    const dedupe = opts.dedupe !== false && !rec.eventKey
     const fp = speech && dedupe
       ? `${rec.who}|${rec.sid || ''}|${text.length}|${text.slice(0, 48)}|${text.slice(-24)}`
       : null
@@ -211,6 +220,10 @@ export class Ledger {
       text,
       tool: rec.tool || null,
       type: rec.type || null,
+      hash: sha256(text),
+    }
+    for (const key of ['id', 'eventKey', 'messageID', 'turnID', 'source', 'evidence', 'versions', 'files', 'status', 'artifact', 'completion', 'callId', 'path']) {
+      if (rec[key] !== undefined && rec[key] !== null) d[key] = rec[key]
     }
     const line = JSON.stringify(d)
     const bytes = Buffer.byteLength(line, 'utf8') + 1
@@ -229,6 +242,7 @@ export class Ledger {
     const off = this.bytes
     appendFileSync(this.streamPath, line + '\n', 'utf8')
     this.bytes += bytes
+    if (d.eventKey) this._eventKeys.add(d.eventKey)
     const id = this._indexDoc(d, off, bytes)
     // 记「写进来的时刻」，不是事件本身的时刻。
     // 用事件时间会失效：重装时回填的旧事件，时间戳是几小时前的，
@@ -239,6 +253,7 @@ export class Ledger {
       for (const [k, v] of this._recent) if (v < cut) this._recent.delete(k)
       if (this._recent.size > 6000) this._recent.clear()
     }
+    try { this.integrity.record('stream.jsonl') } catch (e) { this._lastIntegrityError = e && e.message }
     this._dirty = true
     return id
   }
@@ -255,6 +270,71 @@ export class Ledger {
       const rec = JSON.parse(buf.toString('utf8'))
       return String(rec.text || '')
     } catch { return d.text }
+  }
+
+  // 完整记录（含来源、证据哈希、前后版本）。索引里只有前缀，正文按偏移回读。
+  fullRecord(id) {
+    const d = this.docs[id]
+    if (!d) return null
+    try {
+      if (this._fd === null) this._fd = openSync(this.streamPath, 'r')
+      const buf = Buffer.alloc(d.bytes)
+      readSync(this._fd, buf, 0, d.bytes, d.off)
+      return JSON.parse(buf.toString('utf8'))
+    } catch { return { ...d } }
+  }
+
+  rows() {
+    return scan(this.streamPath).rows
+  }
+
+  // 校验已接纳字节、正文指纹和证据 blob。OK 不证明内容真实或基线之前没丢过。
+  verify() {
+    let result
+    try { result = this.integrity.verify() } catch (e) {
+      result = { ok: false, status: 'BUSY', problems: [{ reason: e.message }], files: {} }
+    }
+    const rows = this.rows()
+    const blobs = verifyBlobs(this.dir, rows)
+    const problems = [...result.problems, ...blobs.problems]
+    return { ...result, ok: result.ok && !problems.length,
+      status: problems.length ? 'BAD' : result.status, problems, blobs: blobs.checked,
+      noHash: rows.filter((r) => !r.hash).length }
+  }
+
+  sync() {
+    return this.integrity.sync()
+  }
+
+  health() {
+    const s = this.stats()
+    const v = this.verify()
+    return { ...s, ledger: v.status, problems: v.problems.length, blobs: v.blobs, noHash: v.noHash }
+  }
+
+  // 从已落盘的工具结果重建缺失的产物索引。重复执行不会重复写。
+  replay() {
+    const rows = this.rows()
+    const keys = new Set(rows.map((r) => r.eventKey).filter(Boolean))
+    let added = 0
+    for (const r of rows) {
+      if (r.type !== 'tool/result' || r.status === 'error' || !Array.isArray(r.files)) continue
+      for (const file of r.files) {
+        const key = `${r.eventKey}:artifact:${file.path}`
+        if (keys.has(key)) continue
+        const before = file.before || { state: 'unknown' }
+        const after = file.after || { state: 'unknown' }
+        if (before.state === 'saved' && after.state === 'saved' && before.sha256 === after.sha256) continue
+        if (after.state !== 'saved' && !(after.state === 'missing' && before.state === 'saved')) continue
+        const id = this.append({
+          who: 'act', ts: r.ts, text: `${after.state === 'missing' ? '删除' : '写入'} ${file.path}；工具 ${r.tool} 已完成；版本 ${after.sha256 || 'missing'}`,
+          tool: r.tool, type: 'artifact', artifact: true, path: file.path, versions: file,
+          eventKey: key, source: { type: 'tool.observation', callID: r.callId, replayed: true },
+        })
+        if (id >= 0) { added += 1; keys.add(key) }
+      }
+    }
+    return added
   }
 
   // ——— 切段 ———
@@ -382,9 +462,12 @@ export class Ledger {
 
   // ——— 显式记下 ———
   mark({ key, text, weight = 1 }) {
-    const rec = { ts: Date.now(), key: key || null, text: String(text || ''), weight }
+    const body = String(text || '')
+    const rec = { ts: Date.now(), key: key || null, text: body, weight,
+      id: sha256(Date.now() + '|' + (key || '') + '|' + body).slice(0, 16), hash: sha256(body) }
     appendFileSync(this.marksPath, JSON.stringify(rec) + '\n', 'utf8')
     this.marks.push(rec)
+    try { this.integrity.record('marks.jsonl') } catch (e) { this._lastIntegrityError = e && e.message }
     this.saveState()
     return rec
   }
