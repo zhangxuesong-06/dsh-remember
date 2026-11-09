@@ -4,12 +4,30 @@
 
 | 目录 | 是什么 | 装在哪 |
 |---|---|---|
+| `agent-memory/` | 通用安装/识别层：检测 harness，选对应 adapter | 仓库根目录运行 |
 | `dsh-memory/` | DSH 插件：按工作区隔离，挂 `session/event` 自动落盘 | `~/.dsh/profiles/node_modules/` |
 | `plugin/self-memory/` | OpenCode 插件：全局一个库，挂 `prompt` / `context` / 工具事件 | 全局 `opencode.json` 的 `plugins` |
 | `workbuddy-memory/` | WorkBuddy skill：hook 每次起进程，前后配对靠 `pending.json` | `~/.workbuddy/skills/self-memory/` |
 | `tools/` | OpenCode 的存储与检索（CLI 和插件共用） | — |
 
 三个实现都能**不靠模型自觉**地记录：消息发生时就落盘，不是等模型想起来调工具。
+
+---
+
+## 通用安装器：先识别，再选 adapter
+
+```bash
+node agent-memory/install.mjs --dry-run
+node agent-memory/install.mjs --harness dsh --workspace "D:\deepseek harness"
+node agent-memory/install.mjs --harness opencode
+node agent-memory/install.mjs --harness workbuddy
+```
+
+`--dry-run` 只打印识别结果和计划，不写文件。默认 `auto` 只自动选“已经装过记忆”的那一个；多个就要求显式 `--harness`，不猜。
+
+如果用户直接把仓库丢给模型，让它读 [`agent-memory/INSTALL.md`](agent-memory/INSTALL.md)——那份是给模型看的安装指南，包含识别规则、adapter 选择、安全约束和验证命令。
+
+**当前阶段**：安装入口统一了，三个后端仍是各自已经跑通的实现；共享 core 和运行时 MCP 入口是下一步的收敛，不在这一版里强行重写。
 
 ---
 

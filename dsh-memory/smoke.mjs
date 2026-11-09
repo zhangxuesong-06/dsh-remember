@@ -149,6 +149,7 @@ try {
 // 这一组测的是「归属」——2026-10-26 我凭印象认错人，就是因为没有这个动作。
 console.log('\n[5b] trace（按字查归属）')
 const trace = B.tools.find((t) => t.name === 'trace')
+const memoryRead = B.tools.find((t) => t.name === 'memory_read')
 try {
   const hit = await trace.execute({ query: '身份来自原话' })
   ok('查得到的说查到了', /【按字查过/.test(hit.text), hit.text.split('\n')[0])
@@ -170,6 +171,15 @@ try {
   ok('没有谁说过时明说', /没有「他说的」这句话/.test(ops.text))
 } catch (e) {
   ok('trace 执行', false, e.message)
+}
+
+console.log('\n[5c] memory_read（按行号回读完整原文）')
+try {
+  const full = await memoryRead.execute({ id: 0 })
+  ok('memory_read 能按行号回读', /^\{/.test(full.text) && full.text.length > 20, full.text.slice(0, 40))
+  ok('memory_read 不是空记录', !/没有这条记录/.test(full.text))
+} catch (e) {
+  ok('memory_read 执行', false, e.message)
 }
 
 console.log('\n[6] 事件捕获')

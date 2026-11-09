@@ -1,0 +1,19 @@
+{
+  "name": "agent-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "通用安装/识别层：按 harness 选择 DSH、OpenCode 或 WorkBuddy 适配器。",
+  "exports": {
+    ".": "./detect.mjs",
+    "./install": "./install.mjs",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "agent-memory": "./install.mjs"
+  },
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "license": "MIT"
+}

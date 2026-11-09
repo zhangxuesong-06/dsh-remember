@@ -70,6 +70,7 @@ node --test tools/tests/memory.test.mjs # 使用独立临时目录测试
 ## 目录
 
 ```
+agent-memory/                    通用安装/识别层（选 adapter，含给模型看的 INSTALL.md）
 plugin/self-memory/              我自己用的 OpenCode 记忆插件（钩子 + 工具）
 workbuddy-memory/                WorkBuddy 记忆 skill（hook + 单文件脚本）
 tools/mem-core.mjs               OpenCode 的存储与检索（CLI 和插件共用）
