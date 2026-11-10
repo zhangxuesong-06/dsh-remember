@@ -193,11 +193,30 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
   }
 
   const minCoverage = 0.2
-  const out = [...sc.entries()]
+  // 摘要只当索引：episode 是派生观察，不应该在默认回忆里压过原话；
+  // artifact 是定位产物的锚点，略低于原话但仍可用。
+  const kindWeight = (d) => d.kind === 'episode' ? 0.55 : d.kind === 'artifact' ? 0.85 : 1
+  const scored = [...sc.entries()]
     .filter(([i]) => effectiveCoverage(i) >= minCoverage)
-    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now), coverage: +effectiveCoverage(i).toFixed(2) }))
+    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now) * kindWeight(pool[i]), coverage: +effectiveCoverage(i).toFixed(2) }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, n)
+
+  // 同一条消息可能被 context 和 text.ended 各写一次；旧数据还可能有整段重复。
+  // 这里只做派生视图去重，不改原始账本。
+  const dedupeKey = (r) => {
+    const text = String(r.text || '').replace(/\s+/g, ' ').trim()
+    if (r.messageID) return `m:${r.sid || ''}|${r.messageID}|${text.length}|${text.slice(0, 120)}`
+    if (text.length >= 80) return `t:${r.who || ''}|${r.sid || ''}|${text.slice(0, 120)}`
+    return null
+  }
+  const seen = new Set()
+  const out = scored.filter((r) => {
+    const key = dedupeKey(r)
+    if (!key) return true
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).slice(0, n)
   if (scopeNote) out.note = scopeNote
   if (hit.length) out.aliasHit = hit
   if (assocHit.hit.length) out.assocHit = assocHit.hit

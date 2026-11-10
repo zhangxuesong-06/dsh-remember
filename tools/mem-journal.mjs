@@ -37,7 +37,7 @@ export function createJournal(root) {
     try { fs.writeFileSync(fd, JSON.stringify(value, null, 2)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
     try { fs.renameSync(tmp, file) } catch (error) { fs.rmSync(tmp, { force: true }); throw error }
   }
-  function locked(fn) {
+  function locked(fn, timeoutMs = 8000) {
     fs.mkdirSync(root, { recursive: true })
     const lock = path.join(root, '.journal-lock')
     const started = Date.now()
@@ -48,8 +48,22 @@ export function createJournal(root) {
         break
       } catch (error) {
         if (error.code !== 'EEXIST') throw error
-        if (Date.now() - started > 1000) throw new Error('Memory journal is busy; use unlock only after its writer has stopped')
-        sleep(5)
+        // 上一个持有者如果是崩溃退出，锁会永久留在盘上。只回收能确认已死亡的 PID，
+        // 不按年龄强拆活进程的锁；owner 文件缺失/损坏时留给 unlock 人工处理。
+        try {
+          const owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'))
+          if (Number.isInteger(owner.pid) && owner.pid > 0) {
+            try { process.kill(owner.pid, 0) } catch (probe) {
+              if (probe.code === 'ESRCH') {
+                fs.rmSync(path.join(lock, 'owner.json'), { force: true })
+                fs.rmdirSync(lock)
+                continue
+              }
+            }
+          }
+        } catch {}
+        if (Date.now() - started > timeoutMs) throw new Error('Memory journal is busy; use unlock only after its writer has stopped')
+        sleep(10)
       }
     }
     try { return fn() } finally {
@@ -163,6 +177,6 @@ export function createJournal(root) {
     fs.rmdirSync(lock)
     return true
   }
-  return { root, append, updateJson, verify: () => locked(inspectAll), sync, unlock,
+  return { root, append, updateJson, verify: () => inspectAll(), sync, unlock,
     rows: (name) => scanFile(path.join(root, name)).rows }
 }

@@ -30,6 +30,26 @@ test('完整保存长回答中部和尾部；相同开头不合并；来源事�
   assert.equal(core.verify().status, 'OK')
 })
 
+test('同一消息的 observed/final 同文只留一条；recall 视图去重', () => {
+  const c = createCapture(core, root)
+  c.user('s', 'u', '问', 1)
+  c.assistant('s', 'm1', 0, '同一段最终回答', 2, null, 'observed')
+  c.assistant('s', 'm1', 0, '同一段最终回答', 3, null, 'text-ended')
+  assert.equal(core.trace('同一段最终回答').length, 1)
+  core.append({ who: 'assistant', kind: 'message', sid: 's', messageID: 'm2', ordinal: 0, text: '重复视图测试内容足够长，用来验证派生去重。' })
+  core.append({ who: 'assistant', kind: 'message', sid: 's', messageID: 'm2', ordinal: 0, text: '重复视图测试内容足够长，用来验证派生去重。' })
+  const hits = core.recall('重复视图测试内容', { n: 5 })
+  assert.equal(hits.filter((h) => h.text.includes('重复视图测试内容')).length, 1)
+})
+
+test('默认回忆不把 episode 摘要排到原话前面', () => {
+  core.append({ who: 'assistant', kind: 'message', text: '缓存方案用本地文件，这是当时的原话。' })
+  core.append({ who: 'system', kind: 'episode', text: '任务摘录：缓存方案用本地文件。' })
+  const hits = core.recall('缓存方案 本地文件', { n: 5 })
+  assert.ok(hits.length >= 1)
+  assert.notEqual(hits[0].kind, 'episode')
+})
+
 test('成功写入关联前后版本；失败写入只有错误证据', () => {
   const c = createCapture(core, root), file = path.join(root, 'feature.js')
   fs.writeFileSync(file, 'version one')
@@ -48,6 +68,7 @@ test('成功写入关联前后版本；失败写入只有错误证据', () => {
   c.after({ ...e, id: 'failed', status: 'error', error: new Error('permission denied') })
   assert.equal(core.readAll().filter((r) => r.kind === 'artifact').length, 1)
   assert.equal(core.readTools().filter((r) => r.phase === 'error').length, 1)
+  assert.match(core.readTools().find((r) => r.phase === 'error').error, /permission denied/)
   assert.equal(core.verify().status, 'OK')
 })
 
@@ -225,6 +246,20 @@ test('上下文压缩后仍能关联已有用户记录，派生记录不能冒�
   const episode = c.finish('s')
   assert.equal(episode.requestID, user.id)
   assert.equal(episode.source.inferredReason, false)
+})
+
+test('verify 不抢写锁；死亡进程留下的锁可自动回收', () => {
+  core.append({ text: 'lock test' })
+  const lock = path.join(root, '.journal-lock')
+  fs.mkdirSync(lock)
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: 999999 }))
+  // 读校验不应该碰写锁，也不应该把锁当成损坏。
+  assert.equal(core.verify().status, 'OK')
+  assert.ok(fs.existsSync(lock))
+  // 写操作发现 owner 已死，自己回收后继续，而不是等满超时。
+  const row = core.append({ text: 'after stale lock' })
+  assert.ok(row && row.seq > 0)
+  assert.equal(fs.existsSync(lock), false)
 })
 
 test('中断回复保留已观察到的可见文本，排除隐藏推理', () => {

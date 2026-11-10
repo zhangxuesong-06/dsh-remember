@@ -1,5 +1,5 @@
 // OpenCode entrypoint. Capture and retrieval stay testable without a running server.
-// Runtime generation 6: prompt-hook user capture; streaming assistant dedupe.
+// Runtime generation 9: stale-lock reclaim, read-only verify, recall dedupe.
 import { Plugin } from '@opencode/plugin'
 import fs from 'node:fs'
 import path from 'node:path'

@@ -8,6 +8,12 @@ const fileOperation = (tool) => /(?:^|[._])(read|write|edit|patch|glob|grep|list
 export function createCapture(core, ws) {
   const { append, appendTool, readAll, readTools, ROOT, journal } = core
   const known = new Map(readAll().filter((r) => r.eventKey).slice(-5000).map((r) => [r.eventKey, r]))
+  const assistantSeen = new Map()
+  for (const r of readAll()) {
+    if (r.kind === 'message' && r.who === 'assistant' && r.messageID) {
+      assistantSeen.set(`${r.sid || ''}|${r.messageID}|${r.ordinal ?? 0}`, r)
+    }
+  }
   function rememberEvent(row) {
     if (known.has(row.eventKey)) return known.get(row.eventKey)
     const saved = append(row)
@@ -29,16 +35,20 @@ export function createCapture(core, ws) {
     // 流式回答会以多个中间版本出现。同一消息同一段只留「首次观察」和「最终完成」两版，
     // 不按正文 hash 建键——否则每个增量都会变成一条独立记忆。
     const stage = completion === 'completed' || completion === 'text-ended' ? 'final' : 'observed'
+    const slot = `${sid || ''}|${messageID}|${ordinal ?? 0}`
+    const seen = assistantSeen.get(slot)
+    // 同一段已经有相同正文：不再写第二份。真实场景里 context 和 text.ended
+    // 经常先后拿到同一段完整文本，这正是重复 top-2 的来源。
+    if (seen && String(seen.text) === String(text)) return seen
+    // 已经有最终版时，迟到的中间观察不再补记。
+    if (seen && stage === 'observed' && (seen.completion === 'completed' || seen.completion === 'text-ended')) return seen
     const eventKey = keyOf('assistant', sid, messageID, ordinal, stage)
     const prior = known.get(eventKey)
     if (prior) return prior
-    // 已经有最终版时，迟到的中间观察不再补记。
-    if (stage === 'observed') {
-      const final = known.get(keyOf('assistant', sid, messageID, ordinal, 'final'))
-      if (final) return final
-    }
-    return rememberEvent({ who: 'assistant', kind: 'message', ws, sid, messageID, ordinal, turnID, text, ts, completion,
+    const saved = rememberEvent({ who: 'assistant', kind: 'message', ws, sid, messageID, ordinal, turnID, text, ts, completion,
       source: { type: 'session.text', messageID, ordinal }, eventKey })
+    if (saved) assistantSeen.set(slot, saved)
+    return saved
   }
   function messages(sid, list) {
     let turnID = ''
@@ -92,6 +102,7 @@ export function createCapture(core, ws) {
     const row = appendTool({ sid, ws, callID, messageID: e.messageID, turnID: call?.turnID || latestTurn(sid),
       tool: e.tool, phase: e.status === 'completed' ? 'completed' : 'error', eventKey, fileOp: !!files.length || fileOperation(e.tool),
       callEventID: call?.id, paired: !!call, files, durationMs: call ? Math.max(0, Date.now() - call.ts) : null,
+      error: error ? String(error.message || error).slice(0, 300) : undefined,
       output: putBlob(ROOT, JSON.stringify(e.status === 'completed' ? e.result ?? null : error ?? null)) })
     project(row)
     return row
