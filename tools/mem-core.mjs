@@ -306,7 +306,7 @@ export function health({ report = false } = {}) {
   const line = `[memory] ${day} total=${docs.length} pinned=${pins} marks=${marks} artifacts=${artifacts}`
     + ` tools=${t.total} assoc=${a ? `${a.meta.terms}/${a.meta.edges}` : 'none'}`
     + ` ledger=${v.status} problems=${v.bad} blobs=${v.blobs} noHash=${v.noHash}`
-  return report ? { line, ok: v.ok } : line
+  return report ? { line, ok: v.status !== 'BAD', status: v.status } : line
 }
 
 // 记忆地图：从 facet 现算，只读。

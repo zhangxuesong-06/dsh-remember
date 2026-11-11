@@ -10,6 +10,7 @@ import { join } from 'node:path'
 
 const sandbox = mkdtempSync(join(tmpdir(), 'hippo-smoke-'))
 process.env.DSH_HOME = join(sandbox, 'dsh')
+process.env.DSH_DISABLE_MAINTENANCE = '1'
 const { mkdirSync, writeFileSync } = await import('node:fs')
 mkdirSync(join(process.env.DSH_HOME, 'dsh-memory'), { recursive: true })
 mkdirSync(join(process.env.DSH_HOME, 'sessions'), { recursive: true })

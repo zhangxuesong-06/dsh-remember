@@ -4,13 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { putBlob } from './bin/mem-evidence.mjs'
 import assert from 'node:assert/strict'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const mem = process.env.WORKBUDDY_TEST_BIN || path.join(here, 'bin', 'mem.mjs')
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
 const root = fs.mkdtempSync(path.join(base, 'wb-memory-'))
-const env = { ...process.env, WORKBUDDY_MEM_HOME: root }
+const env = { ...process.env, WORKBUDDY_MEM_HOME: root, WORKBUDDY_DISABLE_MAINTENANCE: '1' }
 let pass = 0
 const check = (name, cond, extra = '') => {
   if (cond) pass += 1
@@ -69,9 +70,11 @@ try {
 
   // 6. 重放补齐产物
   const replayFile = path.join(root, 'replay.js')
+  const replayBefore = putBlob(root, 'replay before').sha256
+  const replayAfter = putBlob(root, 'replay after').sha256
   fs.appendFileSync(stream, JSON.stringify({
     ts: Date.now(), who: 'act', type: 'tool/result', text: '写完了', tool: 'Write', eventKey: 'tool:s1:r1:result',
-    status: 'completed', files: [{ path: replayFile, before: { state: 'saved', sha256: 'a'.repeat(64) }, after: { state: 'saved', sha256: 'b'.repeat(64) } }],
+    status: 'completed', files: [{ path: replayFile, before: { state: 'saved', sha256: replayBefore }, after: { state: 'saved', sha256: replayAfter } }],
   }) + '\n')
   run(['replay'])
   run(['replay'])
@@ -80,6 +83,12 @@ try {
   // 7. show 能读完整原文
   const shown = run(['show', '0'])
   check('show 能回读原文', shown.status === 0 && shown.stdout.includes('中间必须保留'))
+
+  // 8. 维护 CLI 能校验同一个库
+  const maint = spawnSync(process.execPath, [path.join(path.dirname(mem), 'mem-maintenance.mjs'), '--verify'], {
+    env, encoding: 'utf8', windowsHide: true,
+  })
+  check('维护 verify 能跑', maint.status === 0 && /"status": "OK"/.test(maint.stdout), maint.stdout.slice(0, 120))
 
   console.log(`\n${pass} passed, ${process.exitCode ? 'failures' : '0 failed'}`)
 } finally {

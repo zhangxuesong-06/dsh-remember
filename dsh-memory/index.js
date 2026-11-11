@@ -30,6 +30,7 @@ import { statSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
 import { Ledger } from './lib/store.mjs'
 import {
   loadCfg, workspaceDir, sameWorkspace, diag, SESSIONS_DIR, CFG_PATH,
@@ -79,6 +80,21 @@ const RULE_ATTRIBUTION = [
   '查到了，就把会话编号和行号一起说出来。同一个工作区里的不同会话是同一条线，不是不同的我。',
 ].join('\n')
 
+let maintenanceStarted = false
+function startMaintenance() {
+  if (maintenanceStarted || process.env.DSH_DISABLE_MAINTENANCE === '1') return
+  maintenanceStarted = true
+  try {
+    const script = fileURLToPath(new URL('./tools/maintenance.mjs', import.meta.url))
+    const base = (process.execPath || '').split(/[\\/]/).pop() || ''
+    const node = /^node(\.exe)?$/i.test(base) ? process.execPath : (process.env.DSH_NODE || 'node')
+    const child = spawn(node, [script, '--due'], { detached: true, stdio: 'ignore', windowsHide: true, env: process.env })
+    child.on('error', (error) => diag('维护进程失败：' + error.message))
+    child.on('exit', (code) => { if (code) diag('维护进程退出：' + code) })
+    child.unref()
+  } catch (error) { diag('维护启动失败：' + error.message) }
+}
+
 export function apply(ctx) {
   // 把 diag 交给 capture：群消息那几行的「收到几条/记了几条/拒收原因」要落到同一个 diag.log，
   // 不另开一套日志文件——验收的人只看一处。
@@ -87,6 +103,7 @@ export function apply(ctx) {
   // 群里「人」的显示名从配置来，别再写死——别人那边的人不叫这个名字。
   // 必须放在 loadCfg() 之后：这一行写在它前面，会直接报 `Cannot access 'cfg' before initialization`。
   setCaptureHuman(cfg.humanName)
+  startMaintenance()
   let cfgMtime = 0
   try { cfgMtime = statSync(CFG_PATH).mtimeMs } catch {}
   const ledgers = new Map()   // `${cwd}|${线名}` -> Ledger

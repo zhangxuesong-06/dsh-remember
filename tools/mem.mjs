@@ -89,10 +89,12 @@ if (cmd === 'add') {
 } else if (cmd === 'verify') {
   const v = verify()
   console.log(`ledger=${v.status} 总计 ${v.total} · 已校验 ${v.checked} · 老记录无指纹 ${v.noHash} · blobs ${v.blobs} · 异常 ${v.bad}`)
-  if (!v.ok) {
+  if (v.status === 'BAD') {
     for (const p of v.problems.slice(0, 10)) console.log(JSON.stringify(p))
     if (v.pending) console.log('有未纳入检查点的记录；确认来源后用 sync 接纳。sync 不会修复损坏字节。')
     process.exitCode = 1
+  } else if (v.status !== 'OK') {
+    console.log('提示：有未纳入检查点的尾部或历史基线；不是损坏。用 sync 检查后接纳。')
   }
 } else if (cmd === 'sync') {
   console.log(JSON.stringify(core.syncIntegrity(), null, 2))

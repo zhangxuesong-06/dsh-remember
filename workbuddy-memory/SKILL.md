@@ -62,7 +62,13 @@ node "$M" verify                      # 校验已接纳字节、正文指纹和�
 node "$M" health                      # 一行体检
 node "$M" sync                        # 检查后接纳历史基线/合法尾部
 node "$M" replay                      # 从工具结果补齐缺失的产物索引
+node "$M" maintenance --due            # 校验 + 快照；SessionStart 会自动尝试
+node "$M" maintenance --backup
+node "$M" maintenance --verify
+node "$M" maintenance --prune          # 默认只试算
 ```
+
+`SessionStart` 会以 detached 子进程运行 `mem-maintenance --due`，默认 12 小时一次；不注册 Windows 计划任务。快照存 `~/.workbuddy/mem/snapshots/`，JSONL 复制、blob 硬链接，默认保留 14 份；`--prune` 只清未被引用且超过 30 天的 blob。
 
 参数：`--ws <工作区子串>` 只看某个工作区、`--limit n`、`--full` 不截断。
 

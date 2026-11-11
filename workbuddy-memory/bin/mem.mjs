@@ -24,8 +24,10 @@
 
 import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, renameSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
+import { spawn, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs } from './mem-evidence.mjs'
 
 const ROOT = process.env.WORKBUDDY_MEM_HOME || join(homedir(), '.workbuddy', 'mem')
@@ -40,6 +42,19 @@ const MAX_TURNS = 14
 const MIN_TURNS = 4
 const MAX_CHARS = 3200
 const integrity = createIntegrity(ROOT, ['stream.jsonl', 'marks.jsonl'])
+const MEMAINT = join(dirname(fileURLToPath(import.meta.url)), 'mem-maintenance.mjs')
+
+function maybeMaintenance() {
+  if (process.env.WORKBUDDY_DISABLE_MAINTENANCE === '1') return
+  try {
+    const child = spawn(process.execPath, [MEMAINT, '--due'], {
+      detached: true, stdio: 'ignore', windowsHide: true, env: process.env,
+    })
+    child.on('error', (e) => diag('维护进程失败：' + e.message))
+    child.on('exit', (code) => { if (code) diag('维护进程退出：' + code) })
+    child.unref()
+  } catch (e) { diag('维护启动失败：' + e.message) }
+}
 
 const DEFAULT_CFG = {
   enabled: true,
@@ -817,6 +832,7 @@ function runHook() {
 
   if (ev === 'SessionStart') {
     writeOut({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: arriveBlock(openStore()) } })
+    maybeMaintenance()
     return
   }
 
@@ -901,10 +917,19 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs health                      一行体检
   node mem.mjs sync                        检查后接纳历史基线/合法尾部
   node mem.mjs replay                      从工具结果重建缺失的产物索引
+  node mem.mjs maintenance --due            校验 + 快照（默认 12 小时一次）
+  node mem.mjs maintenance --backup
+  node mem.mjs maintenance --verify
+  node mem.mjs maintenance --prune          默认只试算
 
   参数：--ws <工作区子串>  --limit n  --full
   数据：${STREAM}`)
   process.exit(0)
+}
+
+if (cmd === 'maintenance') {
+  const r = spawnSync(process.execPath, [MEMAINT, ...args], { stdio: 'inherit', windowsHide: true, env: process.env })
+  process.exit(r.status || 0)
 }
 
 if (cmd === 'remember') {

@@ -21,6 +21,7 @@
     "selftest.mjs",
     "smoke.mjs",
     "lib/*.mjs",
+    "tools/*.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

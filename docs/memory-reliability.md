@@ -71,3 +71,18 @@ node tools/mem.mjs verify
 DSH 的 `session/event` 在同一进程连续到达，调用/结果用内存 Map 配对；进程重启会丢掉配对，此时结果仍落盘，但前版本标 `unknown`。WorkBuddy 每个 hook 是独立进程，所以配对写在 `pending.json`，超过 6 小时未配对的条目会被清掉。
 
 两个实现都保留“旧数据不改写”：首次 `sync` 只建立当前基线，`noHash` / `UNTRACKED` 会明确显示；`dedup` / `compact --apply` 不再改写原始账本。已用隔离临时库验证长文本、来源去重、成功/失败写入、前后版本、篡改/删行/截尾检测、合法尾部接纳和重放幂等。DSH 原有 `selftest` 100/100、`smoke` 59/59 仍通过；WorkBuddy 新增测试 13/13 通过。实机只做了只读打开、`sync` 建基线和 `verify`/`health`，没有伪造真实会话做端到端召回测试。
+
+## Token 与维护
+
+OpenCode 的 `context` 钩子原来每次模型调用都注入约 976 字符（约 680–980 tokens）。现在：
+
+- 每回合首次注入约 400–600 字符；
+- 同一回合的工具续调只注入 40–80 字符的编号指针；
+- `mem.recall` 每次返回约 420 字符摘录，完整原文用 `mem_read`；
+- `MEMORY_COMPACT_REPEAT=0` 可关闭续调紧凑模式。
+
+这些是输入 token，不增加模型调用次数；稳定前缀仍可被上下文缓存命中。
+
+维护只由插件/软件触发：OpenCode 在 `setupMemory`、DSH 在 `apply`、WorkBuddy 在 `SessionStart` 以 detached 子进程运行 `--due`，多个工作区实例用锁和 `maintenance.json.lastRun` 收敛；默认 12 小时一次，`MEM_MAINTENANCE_INTERVAL_HOURS=0` / `DSH_MAINTENANCE_INTERVAL_HOURS=0` / `WORKBUDDY_MAINTENANCE_INTERVAL_HOURS=0` 可改为每次打开 harness 尝试。没有注册 Windows 计划任务。
+
+`--backup` 复制 JSONL 与 `integrity.json`，blob 用同盘硬链接，因此快照几乎不额外占空间；默认保留 14 份。`--prune` 默认只试算，只清“未被任何记录引用且超过 30 天”的 blob；原始账本永不自动删除。`--verify` 写 `maintenance.json`，异常时退出码 1。

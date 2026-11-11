@@ -66,9 +66,15 @@ node cli.mjs health "D:\你的工作区"
 node cli.mjs show   "D:\你的工作区" 123
 node cli.mjs replay "D:\你的工作区"
 node cli.mjs sync   "D:\你的工作区"
+node tools/maintenance.mjs --due
+node tools/maintenance.mjs --backup
+node tools/maintenance.mjs --verify
+node tools/maintenance.mjs --prune
 ```
 
 `verify` 校验已接纳字节、正文指纹和证据，异常时退出码 1。`sync` 只在检查通过后接纳历史基线/合法尾部，不修复坏字节。`replay` 从工具结果补齐缺失的产物索引，重复执行不会重复写。
+
+`tools/maintenance.mjs --due` 会校验、生成快照（JSONL 复制，blob 硬链接）、按 `--keep` 清理旧快照；默认 12 小时一次，由插件在挂载时自动触发。`--prune` 默认只试算，只清未被任何记录引用且超过 30 天的 blob；原始账本不自动删除。没有注册 Windows 计划任务。
 
 ---
 

@@ -55,6 +55,19 @@ node --test tools/tests/memory.test.mjs # 使用独立临时目录测试
 
 会话里也有 `mem` 工具：`recall` / `read` / `trace` / `remember` / `map` / `alias`。
 
+## 维护与 token
+
+```bash
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --due   # 插件启动时自动触发
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --backup
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --verify
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --prune # 默认只试算
+```
+
+- 默认 12 小时一次；`MEM_MAINTENANCE_INTERVAL_HOURS=0` 改为每次打开 harness 尝试。
+- 快照 JSONL 复制、blob 硬链接，默认保留 14 份；原始账本不自动删。
+- `MEMORY_COMPACT_REPEAT=0` 关闭工具续调的紧凑注入。
+
 **分工**：`recall` 找线索，`read` 取证据，`trace` 按字核对消息角色。承诺要回看原文及引用上下文；系统派生记录不能当作用户或助手发言。
 
 **地图是视图，不是存储。** `map` 每次从 facet 现算，删了不影响任何数据；

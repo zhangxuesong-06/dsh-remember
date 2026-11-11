@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { test, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createCapture } from '../mem-capture.mjs'
@@ -12,6 +13,7 @@ import { setupMemory } from '../mem-plugin.mjs'
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
 const root = fs.mkdtempSync(path.join(base, 'memory-test-'))
 process.env.OPENCODE_MEM_HOME = root
+process.env.MEMORY_DISABLE_MAINTENANCE = '1'
 const core = await import('../mem-core.mjs')
 beforeEach(() => { fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(root) })
 after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -205,11 +207,22 @@ test('插件在文本结束时保存最后回答；续调每次注入，持久�
   await consumed
   assert.equal(core.trace('最后回答含实现细节').length, 1)
   assert.equal(core.trace('别的工作区').length, 0)
+  const lengths = []
   for (let i = 0; i < 2; i++) {
     const e = { sessionID: 's', messages: [{ role: 'user', content: '保存最后回答' }], system: [] }
     await hooks.context(e)
     assert.match(e.messages[0].content, /memory-background/)
+    lengths.push(e.messages[0].content.length)
+    if (i === 1) assert.match(e.messages[0].content, /本轮已给/)
   }
+  assert.ok(lengths[1] < lengths[0], `compact=${lengths[1]} full=${lengths[0]}`)
+  const noTools = { sessionID: 's', messages: [{ role: 'user', content: '保存最后回答' }], system: [], tools: {} }
+  await hooks.context(noTools)
+  assert.match(noTools.messages[0].content, /当前模型无记忆工具/)
+  const codeMode = { sessionID: 's', messages: [{ role: 'user', content: '保存最后回答' }], system: [], tools: { execute: { description: 'code mode' } } }
+  await hooks.context(codeMode)
+  assert.match(codeMode.messages[0].content, /mem_read/)
+  assert.doesNotMatch(codeMode.messages[0].content, /当前模型无记忆工具/)
   assert.ok(core.readAll().every((r) => !r.text.includes('memory-background')))
   const read = tools.find((t) => t.name === 'read')
   const row = core.readAll().find((r) => r.who === 'assistant')
@@ -260,6 +273,22 @@ test('verify 不抢写锁；死亡进程留下的锁可自动回收', () => {
   const row = core.append({ text: 'after stale lock' })
   assert.ok(row && row.seq > 0)
   assert.equal(fs.existsSync(lock), false)
+})
+
+test('维护 CLI：快照、verify、due 幂等', () => {
+  core.append({ text: 'maintenance test' })
+  const maint = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'mem-maintenance.mjs')
+  const run = (...args) => spawnSync(process.execPath, [maint, '--root', root, ...args], { encoding: 'utf8' })
+  const backup = run('--backup')
+  assert.equal(backup.status, 0, backup.stderr)
+  assert.ok(fs.readdirSync(path.join(root, 'snapshots')).length >= 1)
+  const verify = run('--verify')
+  assert.equal(verify.status, 0, verify.stderr)
+  const due1 = run('--due')
+  assert.equal(due1.status, 0, due1.stderr)
+  assert.match(due1.stdout, /lastRun/)
+  const due2 = run('--due')
+  assert.match(due2.stdout, /skipped/)
 })
 
 test('中断回复保留已观察到的可见文本，排除隐藏推理', () => {

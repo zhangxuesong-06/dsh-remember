@@ -15,6 +15,7 @@ fs.mkdirSync(binDir, { recursive: true })
 for (const [from, to] of [
   [path.join(here, 'bin', 'mem.mjs'), path.join(binDir, 'mem.mjs')],
   [path.join(here, 'bin', 'mem-evidence.mjs'), path.join(binDir, 'mem-evidence.mjs')],
+  [path.join(here, 'bin', 'mem-maintenance.mjs'), path.join(binDir, 'mem-maintenance.mjs')],
   [path.join(here, 'SKILL.md'), path.join(skillDir, 'SKILL.md')],
 ]) {
   fs.copyFileSync(from, to)

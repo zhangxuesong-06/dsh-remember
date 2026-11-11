@@ -119,6 +119,35 @@ node "$M" replay
 node --test workbuddy-memory/test.mjs
 ```
 
+## Token 开销与维护
+
+插件不会额外调用模型，只增加请求输入。OpenCode 的实测开销：
+
+```text
+优化前：预激活平均 976 字符/次，约 680–980 tokens
+优化后：每回合首次约 400–600 字符；同一回合的工具续调只给 40–80 字符指针
+```
+
+`mem.recall` 也改成索引优先：每次返回约 420 字符摘录，完整原文用 `mem_read #编号`。这样查找旧事时通常比“扫项目文件”省，日常对话的固定开销也比原来低。
+
+开关：
+
+- `MEMORY_COMPACT_REPEAT=0`：关闭工具续调的紧凑指针，恢复每次全量注入；
+- `MEM_MAINTENANCE_INTERVAL_HOURS=0`：每次打开 harness 都尝试维护；默认 12 小时。
+
+维护只由插件/软件触发，不注册 Windows 计划任务：
+
+```bash
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --due
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --backup
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --verify
+node tools/mem-maintenance.mjs --root ~/.opencode-mem --prune
+```
+
+`--due` 会校验、生成快照（JSONL 复制，blob 硬链接）、按 `--keep` 清理旧快照；默认保留 14 份。`--prune` 默认只试算，只清“未被任何记录引用且超过 30 天”的 blob；原始账本永不自动删除。OpenCode 在 setup、DSH 在 apply、WorkBuddy 在 SessionStart 时 spawn 这个维护进程，多个工作区实例靠锁和 `maintenance.json` 的 `lastRun` 收敛。
+
+---
+
 ## 三个实现怎么对齐
 
 共同原则是：原文只追加、摘要只当索引、完整证据按哈希回查、自动记录不猜原因。差异只在事件模型：

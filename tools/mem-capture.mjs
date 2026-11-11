@@ -7,22 +7,42 @@ const keyOf = (...parts) => sha256(JSON.stringify(parts))
 const fileOperation = (tool) => /(?:^|[._])(read|write|edit|patch|glob|grep|list|ls|rg|multiedit|multi_edit|apply_patch)$/.test(String(tool))
 export function createCapture(core, ws) {
   const { append, appendTool, readAll, readTools, ROOT, journal } = core
-  const known = new Map(readAll().filter((r) => r.eventKey).slice(-5000).map((r) => [r.eventKey, r]))
+  const all = readAll()
+  const known = new Map(all.filter((r) => r.eventKey).slice(-5000).map((r) => [r.eventKey, r]))
   const assistantSeen = new Map()
-  for (const r of readAll()) {
+  const processedMessages = new Set()
+  const lastUserBySid = new Map()
+  for (const r of all) {
+    if (r.who === 'user') lastUserBySid.set(r.sid, r)
     if (r.kind === 'message' && r.who === 'assistant' && r.messageID) {
       assistantSeen.set(`${r.sid || ''}|${r.messageID}|${r.ordinal ?? 0}`, r)
     }
+  }
+  // 工具事件很频繁；每次 before/after 都重读整个 tools.jsonl 会随库增长变慢。
+  const toolByEvent = new Map()
+  const toolByCall = new Map()
+  for (const r of readTools()) {
+    if (r.eventKey) toolByEvent.set(r.eventKey, r)
+    if (r.phase === 'call' && r.callID) toolByCall.set(`${r.sid || ''}|${r.callID}`, r)
   }
   function rememberEvent(row) {
     if (known.has(row.eventKey)) return known.get(row.eventKey)
     const saved = append(row)
     if (saved) known.set(row.eventKey, saved)
     if (known.size > 5000) known.delete(known.keys().next().value)
+    if (saved && saved.who === 'user') lastUserBySid.set(saved.sid, saved)
+    return saved
+  }
+  function rememberTool(row) {
+    const saved = appendTool(row)
+    if (saved) {
+      if (saved.eventKey) toolByEvent.set(saved.eventKey, saved)
+      if (saved.phase === 'call' && saved.callID) toolByCall.set(`${saved.sid || ''}|${saved.callID}`, saved)
+    }
     return saved
   }
   const latestTurn = (sid) => {
-    const row = readAll().filter((r) => r.sid === sid && r.who === 'user').at(-1)
+    const row = lastUserBySid.get(sid)
     return row ? row.messageID || row.id || 'legacy:' + row.seq : ''
   }
   function user(sid, messageID, text, ts) {
@@ -52,14 +72,21 @@ export function createCapture(core, ws) {
   }
   function messages(sid, list) {
     let turnID = ''
+    const seen = new Set()
     for (const m of list || []) {
       if (m.type === 'user') {
         turnID = m.id
+        const key = m.id ? `u:${sid}|${m.id}` : null
+        if (key && (processedMessages.has(key) || seen.has(key))) continue
         user(sid, m.id, m.text, m.time?.created)
+        if (key) { processedMessages.add(key); seen.add(key) }
       } else if (m.type === 'assistant') {
+        const key = m.id ? `a:${sid}|${m.id}|${m.time?.completed ? 'c' : 's'}` : null
+        if (key && (processedMessages.has(key) || seen.has(key))) continue
         for (const [ordinal, part] of (m.content || []).entries()) {
           if (part.type === 'text') assistant(sid, m.id, ordinal, part.text, m.time?.created, turnID || latestTurn(sid), m.time?.completed ? 'completed' : 'observed')
         }
+        if (key) { processedMessages.add(key); seen.add(key) }
       }
     }
   }
@@ -67,11 +94,11 @@ export function createCapture(core, ws) {
     const sid = e.sessionID, callID = e.id
     if (!sid || !callID) throw new Error('Tool event lacks session/call ID')
     const eventKey = keyOf('call', sid, callID)
-    const prior = readTools().find((r) => r.eventKey === eventKey)
+    const prior = toolByEvent.get(eventKey)
     if (prior) return prior
     const input = e.input ?? {}
     const files = artifactPaths(e.tool, input, ws).map((p) => snapshot(ROOT, p))
-    return appendTool({ sid, ws, callID, messageID: e.messageID, turnID: latestTurn(sid),
+    return rememberTool({ sid, ws, callID, messageID: e.messageID, turnID: latestTurn(sid),
       tool: e.tool, phase: 'call', eventKey, fileOp: !!files.length || fileOperation(e.tool),
       input: putBlob(ROOT, JSON.stringify(input)), files })
   }
@@ -93,13 +120,13 @@ export function createCapture(core, ws) {
     const sid = e.sessionID, callID = e.id
     if (!sid || !callID) throw new Error('Tool event lacks session/call ID')
     const eventKey = keyOf('result', sid, callID)
-    const prior = readTools().find((r) => r.eventKey === eventKey)
+    const prior = toolByEvent.get(eventKey)
     if (prior) { project(prior); return prior }
-    const call = readTools().find((r) => r.sid === sid && r.callID === callID && r.phase === 'call')
+    const call = toolByCall.get(`${sid}|${callID}`) || null
     const paths = call?.files?.map((f) => f.path) || artifactPaths(e.tool, e.input, ws)
     const files = paths.map((p) => ({ path: p, before: call?.files?.find((f) => f.path === p) || { state: 'unknown' }, after: snapshot(ROOT, p) }))
     const error = e.error ? { name: e.error.name, message: e.error.message || String(e.error), ...e.error } : undefined
-    const row = appendTool({ sid, ws, callID, messageID: e.messageID, turnID: call?.turnID || latestTurn(sid),
+    const row = rememberTool({ sid, ws, callID, messageID: e.messageID, turnID: call?.turnID || latestTurn(sid),
       tool: e.tool, phase: e.status === 'completed' ? 'completed' : 'error', eventKey, fileOp: !!files.length || fileOperation(e.tool),
       callEventID: call?.id, paired: !!call, files, durationMs: call ? Math.max(0, Date.now() - call.ts) : null,
       error: error ? String(error.message || error).slice(0, 300) : undefined,
