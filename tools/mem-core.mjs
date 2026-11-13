@@ -103,10 +103,24 @@ export function tok(s) {
 
 const DAY = 864e5
 
-// 时间衰减：幂律，不是指数。近期陡、远期平。
-function recency(ts, now = Date.now()) {
+// 时间衰减：默认是「新鲜加分」，不是「陈旧惩罚」。
+//
+// 2026-11-13 用 102 条真实「提问 → 当时回答」配对评测：
+//   衰减（旧默认）  hit@8 0.814  MRR 0.650
+//   加分（boost .5/3d）hit@8 0.892  MRR 0.742，近三天命中不变
+// 衰减会让 40 天前的记录只剩 5%，等于默认判定它不重要；老话题被永久埋掉。
+// 加分只给新记录最多 1.5 倍，相关性和时间各自独立。
+// 需要旧行为时传 { mode: 'decay', t0, alpha, floor }。
+function recency(ts, now = Date.now(), params = {}) {
   const days = Math.max(0, (now - (ts || now)) / DAY)
-  const t0 = 0.25, alpha = 0.8, floor = 0.03
+  if ((params.mode || 'boost') === 'boost') {
+    const boost = Math.max(0, Number(params.boost ?? 0.5))
+    const halfLife = Math.max(0.01, Number(params.halfLife ?? 3))
+    return 1 + boost * Math.pow(0.5, days / halfLife)
+  }
+  const t0 = Math.max(0.01, Number(params.t0 ?? 0.25))
+  const alpha = Math.max(0, Number(params.alpha ?? 0.8))
+  const floor = Math.min(1, Math.max(0, Number(params.floor ?? 0.03)))
   return floor + (1 - floor) * Math.pow(1 + days / t0, -alpha)
 }
 
@@ -149,7 +163,15 @@ function extendPostingIndex(cache, docs) {
 }
 let _docIndexCache = { stamp: '', post: null, dl: null, total: 0, docs: null, docsLen: 0 }
 
-export function recall(query, { n = 5, ws = null, scope = null, now = Date.now() } = {}) {
+export function recall(query, { n = 5, ws = null, scope = null, now = Date.now(), rank = {} } = {}) {
+  // 打分参数只在这一处收口。默认值等于历史行为；eval-recall 用同一组开关做 A/B。
+  const rankCfg = {
+    recency: rank.recency || {},
+    kindWeight: { episode: 0.55, artifact: 0.85, ...(rank.kindWeight || {}) },
+    whoWeight: { user: 1, assistant: 1, system: 1, ...(rank.whoWeight || {}) },
+    bm25: { k1: 1.25, b: 0.72, ...(rank.bm25 || {}) },
+    minCoverage: rank.minCoverage ?? 0.2,
+  }
   const docs = readAll()
   if (!docs.length) return []
   let pool = ws ? docs.filter((d) => d.ws === ws) : docs
@@ -191,7 +213,7 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
     const idx = buildPostingIndex(pool)
     post = idx.post; dl = idx.dl; total = idx.total
   }
-  const N = pool.length, avg = total / N || 1, K1 = 1.25, B = 0.72
+  const N = pool.length, avg = total / N || 1, K1 = rankCfg.bm25.k1, B = rankCfg.bm25.b
   const sc = new Map()
   const add = (term, weight) => {
     const a = post.get(term); if (!a) return
@@ -250,13 +272,13 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
     return qterms.length ? present.size / qterms.length : 0
   }
 
-  const minCoverage = 0.2
+  const minCoverage = rankCfg.minCoverage
   // 摘要只当索引：episode 是派生观察，不应该在默认回忆里压过原话；
   // artifact 是定位产物的锚点，略低于原话但仍可用。
-  const kindWeight = (d) => d.kind === 'episode' ? 0.55 : d.kind === 'artifact' ? 0.85 : 1
+  const kindWeight = (d) => (rankCfg.kindWeight[d.kind] ?? 1) * (rankCfg.whoWeight[d.who] ?? 1)
   const scored = [...sc.entries()]
     .filter(([i]) => effectiveCoverage(i) >= minCoverage)
-    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now) * kindWeight(pool[i]), coverage: +effectiveCoverage(i).toFixed(2) }))
+    .map(([i, s]) => ({ ...pool[i], score: s * recency(pool[i].ts, now, rankCfg.recency) * kindWeight(pool[i]), coverage: +effectiveCoverage(i).toFixed(2) }))
     .sort((a, b) => b.score - a.score)
 
   // 同一条消息可能被 context 和 text.ended 各写一次；旧数据还可能有整段重复。

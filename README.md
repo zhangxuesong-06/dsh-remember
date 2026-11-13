@@ -85,6 +85,7 @@ node tools/mem.mjs show 123 --offset 0 --limit 12000
 node tools/mem.mjs verify
 node tools/mem.mjs health
 node tools/mem.mjs replay
+node tools/eval-recall.mjs --grid
 node --test tools/tests/memory.test.mjs
 ```
 
@@ -129,6 +130,8 @@ node --test workbuddy-memory/test.mjs
 ```
 
 `mem.recall` 也改成索引优先：每次返回约 420 字符摘录，完整原文用 `mem_read #编号`。这样查找旧事时通常比“扫项目文件”省，日常对话的固定开销也比原来低。
+
+排序默认「相关优先，新鲜只加分」：新记录最多加 1.5 倍，不会把旧话题按天数压死。改动前后用 `node tools/eval-recall.mjs` 在同一批真实「提问 → 当时回答」上对比，数字和取舍写在 `docs/memory-reliability.md`。
 
 开关：
 

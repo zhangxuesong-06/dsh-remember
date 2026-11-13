@@ -155,6 +155,51 @@ test('同义词单独命中可召回；patch 的增删改和移动路径都能�
   assert.equal(artifactPaths('functions.apply_patch', { patchText: '*** Add File: a\n*** Update File: b\n*** Move to: c\n*** Delete File: d\n' }, root).length, 4)
 })
 
+test('默认相关优先、新鲜只加分；衰减模式仍偏向新记录', () => {
+  const now = Date.now()
+  core.append({ who: 'assistant', kind: 'message', sid: 's', messageID: 'old', ts: now - 40 * 864e5,
+    text: '缓存方案用本地文件 缓存方案 缓存方案 缓存方案' })
+  core.append({ who: 'assistant', kind: 'message', sid: 's', messageID: 'new', ts: now, text: '缓存方案' })
+  // 默认 boost：相关的老记录不该因为 40 天前就被埋掉。
+  assert.equal(core.recall('缓存方案 本地文件', { n: 2 })[0].messageID, 'old')
+  // 需要旧行为时可以显式回到衰减。
+  const decay = core.recall('缓存方案 本地文件', { n: 2, rank: { recency: { mode: 'decay' } } })
+  assert.equal(decay[0].messageID, 'new')
+  const flat = core.recall('缓存方案 本地文件', { n: 2, rank: { recency: { mode: 'decay', floor: 1 } } })
+  assert.equal(flat[0].messageID, 'old')
+})
+
+test('检索打分可调类别权重；episode 默认仍低于原话', () => {
+  const ts = Date.now() - 864e5
+  core.append({ who: 'system', kind: 'episode', text: '任务摘录：缓存方案用本地文件', ts })
+  core.append({ who: 'assistant', kind: 'message', text: '缓存方案用本地文件', ts })
+  const def = core.recall('缓存方案 本地文件', { n: 2 })
+  assert.equal(def[0].kind, 'message')
+  const boosted = core.recall('缓存方案 本地文件', { n: 2, rank: { kindWeight: { episode: 2 } } })
+  assert.equal(boosted[0].kind, 'episode')
+})
+
+test('评测工具按「提问 → 当时回答」判定命中，并区分老记录', async () => {
+  const { buildCases, evaluate } = await import('../eval-recall.mjs')
+  const now = Date.now()
+  const rows = [
+    { who: 'user', kind: 'message', messageID: 'u1', seq: 1, ts: now, text: '缓存方案用本地文件还是 Redis 集群' },
+    { who: 'assistant', kind: 'message', turnID: 'u1', seq: 2, ts: now, text: '用本地文件，不用 Redis。' },
+    { who: 'user', kind: 'message', messageID: 'u2', seq: 3, ts: now - 10 * 864e5, text: '另一个问题是什么什么' },
+    { who: 'assistant', kind: 'message', turnID: 'u2', seq: 4, ts: now - 10 * 864e5, text: '另一个回答。' },
+  ]
+  const cases = buildCases(rows)
+  assert.equal(cases.length, 2)
+  const fake = (q) => (q.includes('缓存')
+    ? [{ seq: 9, messageID: 'x', turnID: 'x', text: '噪声' }, { seq: 2, messageID: 'a1', turnID: 'u1', text: '回答' }]
+    : [{ seq: 4, messageID: 'a2', turnID: 'u2', text: '回答' }])
+  const r = evaluate(cases, {}, now, fake)
+  assert.equal(r.all.hit1, 0.5)
+  assert.equal(r.all.hit8, 1)
+  assert.equal(r.old.n, 1)
+  assert.equal(r.old.hit8, 1)
+})
+
 test('多个进程并发追加无丢失，来源 ID 去重也跨进程有效', async () => {
   const moduleURL = new URL('../mem-journal.mjs', import.meta.url).href
   await Promise.all([0, 1, 2, 3].map((worker) => new Promise((resolve, reject) => {

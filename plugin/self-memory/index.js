@@ -1,5 +1,5 @@
 // OpenCode entrypoint. Capture and retrieval stay testable without a running server.
-// Runtime generation 21: messageID+text assistant dedupe, cached reads, WB FTS index.
+// Runtime generation 22: relevance-first ranking (freshness as bonus), recall eval harness.
 import { Plugin } from '@opencode/plugin'
 import fs from 'node:fs'
 import path from 'node:path'
