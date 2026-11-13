@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 安装脚本会复制 `bin/mem.mjs`、`bin/mem-evidence.mjs` 和 `SKILL.md`，并在 `~/.workbuddy/settings.json` 里挂五个 hook：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`。改前自动备份 settings，已有的无关 hook 原样保留。**要重开一次 WorkBuddy 才生效。**
 
-数据在 `~/.workbuddy/mem/`：`stream.jsonl` 是原文，`blobs/` 是完整工具证据和文件版本，`integrity.json` 是字节基线，`pending.json` 负责跨进程的工具前后配对。默认不截断文本；只有配置显式打开 `truncate` 才按 `capChars` 截。
+数据在 `~/.workbuddy/mem/`：`stream.jsonl` 是原文，`blobs/` 是完整工具证据和文件版本，`integrity.json` 是字节基线，`pending.json` 负责跨进程的工具前后配对。默认不截断文本；只有配置显式打开 `truncate` 才按 `capChars` 截。检索优先走 `index.db`（SQLite FTS5 派生索引），索引缺失/损坏时自动回退到全量读取；`index.db` 可以删除重建，原文不动。
 
 ```bash
 M="$HOME/.workbuddy/skills/self-memory/bin/mem.mjs"

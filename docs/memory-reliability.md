@@ -86,3 +86,5 @@ OpenCode 的 `context` 钩子原来每次模型调用都注入约 976 字符（�
 维护只由插件/软件触发：OpenCode 在 `setupMemory`、DSH 在 `apply`、WorkBuddy 在 `SessionStart` 以 detached 子进程运行 `--due`，多个工作区实例用锁和 `maintenance.json.lastRun` 收敛；默认 12 小时一次，`MEM_MAINTENANCE_INTERVAL_HOURS=0` / `DSH_MAINTENANCE_INTERVAL_HOURS=0` / `WORKBUDDY_MAINTENANCE_INTERVAL_HOURS=0` 可改为每次打开 harness 尝试。没有注册 Windows 计划任务。
 
 `--backup` 复制 JSONL 与 `integrity.json`，blob 用同盘硬链接，因此快照几乎不额外占空间；默认保留 14 份。`--prune` 默认只试算，只清“未被任何记录引用且超过 30 天”的 blob；原始账本永不自动删除。`--verify` 写 `maintenance.json`，异常时退出码 1。
+
+WorkBuddy 另有一层 SQLite FTS5 派生索引（`index.db`）。它只加速 hook 的检索：`SessionStart` 读 episode 元数据，`UserPromptSubmit` 先用 FTS 找候选；索引缺失、构建中、落后于 stream 或写入失败时自动回退到原来的全量读取。每次 append 增量更新索引，`SessionStart` 在索引超过 24 小时或 `meta.bytes` 与 `stream.jsonl` 大小不一致时后台重建；`index.db` 可随时删除，`stream.jsonl` 仍是唯一真相。50k 条合成数据上，hook 走索引约 195ms，全量回退约 440ms；主要固定成本仍是 Node 启动。

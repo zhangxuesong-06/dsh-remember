@@ -90,6 +90,12 @@ try {
   })
   check('维护 verify 能跑', maint.status === 0 && /"status": "OK"/.test(maint.stdout), maint.stdout.slice(0, 120))
 
+  // 9. 派生索引能构建且可重复构建
+  const idx = run(['index', 'build'])
+  check('索引构建能跑', idx.status === 0 && /"ok":true/.test(idx.stdout), idx.stdout.slice(0, 120))
+  const idx2 = run(['index', 'build'])
+  check('索引可重复构建', idx2.status === 0 && /"ok":true/.test(idx2.stdout), idx2.stdout.slice(0, 120))
+
   console.log(`\n${pass} passed, ${process.exitCode ? 'failures' : '0 failed'}`)
 } finally {
   fs.rmSync(root, { recursive: true, force: true })

@@ -34,12 +34,27 @@ export function diag(msg) {
   } catch {}
 }
 
+const fileStamp = (file) => {
+  try { const s = fs.statSync(file); return `${s.size}:${s.mtimeMs}` } catch { return '' }
+}
+let _rowsCache = { stream: '', rows: null, marks: '', marksRows: null, tools: '', toolsRows: null }
+
 export function readAll() {
-  return journal.rows('stream.jsonl')
+  const stamp = fileStamp(STREAM)
+  if (_rowsCache.stream === stamp && _rowsCache.rows) return _rowsCache.rows
+  const rows = journal.rows('stream.jsonl')
+  _rowsCache.stream = stamp
+  _rowsCache.rows = rows
+  return rows
 }
 
 export function readMarks() {
-  return journal.rows('marks.jsonl')
+  const stamp = fileStamp(MARKS)
+  if (_rowsCache.marks === stamp && _rowsCache.marksRows) return _rowsCache.marksRows
+  const rows = journal.rows('marks.jsonl')
+  _rowsCache.marks = stamp
+  _rowsCache.marksRows = rows
+  return rows
 }
 
 export function readPins() {
@@ -95,6 +110,45 @@ function recency(ts, now = Date.now()) {
   return floor + (1 - floor) * Math.pow(1 + days / t0, -alpha)
 }
 
+function buildPostingIndex(list) {
+  const post = new Map()
+  const dl = []
+  let total = 0
+  list.forEach((d, i) => {
+    const t = tok(d.text)
+    dl.push(t.length); total += t.length
+    const tf = new Map()
+    for (const x of t) tf.set(x, (tf.get(x) || 0) + 1)
+    for (const [k, v] of tf) {
+      let a = post.get(k); if (!a) { a = []; post.set(k, a) }
+      a.push(i, v)
+    }
+  })
+  return { post, dl, total, docs: list, docsLen: list.length }
+}
+
+function extendPostingIndex(cache, docs) {
+  if (!cache || !cache.post || docs.length < cache.docsLen) return null
+  // 只接受“尾部追加”：旧前缀的 id 必须完全没变；否则重建。
+  for (let i = 0; i < cache.docsLen; i++) {
+    if ((cache.docs[i] && cache.docs[i].id) !== (docs[i] && docs[i].id)) return null
+  }
+  for (let i = cache.docsLen; i < docs.length; i++) {
+    const t = tok(docs[i].text)
+    cache.dl.push(t.length); cache.total += t.length
+    const tf = new Map()
+    for (const x of t) tf.set(x, (tf.get(x) || 0) + 1)
+    for (const [k, v] of tf) {
+      let a = cache.post.get(k); if (!a) { a = []; cache.post.set(k, a) }
+      a.push(i, v)
+    }
+  }
+  cache.docs = docs
+  cache.docsLen = docs.length
+  return cache
+}
+let _docIndexCache = { stamp: '', post: null, dl: null, total: 0, docs: null, docsLen: 0 }
+
 export function recall(query, { n = 5, ws = null, scope = null, now = Date.now() } = {}) {
   const docs = readAll()
   if (!docs.length) return []
@@ -120,19 +174,23 @@ export function recall(query, { n = 5, ws = null, scope = null, now = Date.now()
   // 别名扩展：同义词表是模型能维护的那部分，错了也只是召回差一点。
   const { extra, hit } = expandQuery(query, aliases)
 
-  const post = new Map()
-  const dl = []
-  let total = 0
-  pool.forEach((d, i) => {
-    const t = tok(d.text)
-    dl.push(t.length); total += t.length
-    const tf = new Map()
-    for (const x of t) tf.set(x, (tf.get(x) || 0) + 1)
-    for (const [k, v] of tf) {
-      let a = post.get(k); if (!a) { a = []; post.set(k, a) }
-      a.push(i, v)
+  let post, dl, total
+  if (!ws && !scope) {
+    const stamp = fileStamp(STREAM)
+    if (_docIndexCache.stamp !== stamp || !_docIndexCache.post) {
+      const extended = _docIndexCache.docsLen && docs.length > _docIndexCache.docsLen
+        ? extendPostingIndex(_docIndexCache, docs)
+        : null
+      _docIndexCache = extended || { stamp, ...buildPostingIndex(docs) }
+      _docIndexCache.stamp = stamp
     }
-  })
+    post = _docIndexCache.post
+    dl = _docIndexCache.dl
+    total = _docIndexCache.total
+  } else {
+    const idx = buildPostingIndex(pool)
+    post = idx.post; dl = idx.dl; total = idx.total
+  }
   const N = pool.length, avg = total / N || 1, K1 = 1.25, B = 0.72
   const sc = new Map()
   const add = (term, weight) => {
@@ -231,7 +289,12 @@ export function appendTool(rec) {
 }
 
 export function readTools() {
-  return journal.rows('tools.jsonl')
+  const stamp = fileStamp(TOOLS)
+  if (_rowsCache.tools === stamp && _rowsCache.toolsRows) return _rowsCache.toolsRows
+  const rows = journal.rows('tools.jsonl')
+  _rowsCache.tools = stamp
+  _rowsCache.toolsRows = rows
+  return rows
 }
 
 export function toolStats() {

@@ -66,9 +66,16 @@ node "$M" maintenance --due            # 校验 + 快照；SessionStart 会自�
 node "$M" maintenance --backup
 node "$M" maintenance --verify
 node "$M" maintenance --prune          # 默认只试算
+node "$M" index build                  # 重建 SQLite FTS 派生索引
 ```
 
 `SessionStart` 会以 detached 子进程运行 `mem-maintenance --due`，默认 12 小时一次；不注册 Windows 计划任务。快照存 `~/.workbuddy/mem/snapshots/`，JSONL 复制、blob 硬链接，默认保留 14 份；`--prune` 只清未被引用且超过 30 天的 blob。
+
+检索优先用 `~/.workbuddy/mem/index.db`（SQLite FTS5）：
+- `index.db` 是派生层，删了可重建，`stream.jsonl` 仍是唯一真相；
+- 索引缺失或写入失败时，hook 自动回退到原来的全量读取；
+- 每次追加会增量更新索引，不需要每个 hook 重读全库；
+- 新增记录先归属到最近一段，定期重建索引会重新切段。
 
 参数：`--ws <工作区子串>` 只看某个工作区、`--limit n`、`--full` 不截断。
 

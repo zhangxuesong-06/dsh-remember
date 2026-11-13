@@ -22,13 +22,14 @@
 //   node mem.mjs hook                     ← 给 hook 用，stdin 吃 JSON
 // 参数：--ws <工作区子串>  --limit n  --full
 
-import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, renameSync } from 'node:fs'
+import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, renameSync, unlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs } from './mem-evidence.mjs'
+import { buildIndex, appendIndex, searchIndex, indexStore, episodesByIds, indexBuiltAt, indexFresh } from './mem-index.mjs'
 
 const ROOT = process.env.WORKBUDDY_MEM_HOME || join(homedir(), '.workbuddy', 'mem')
 const STREAM = join(ROOT, 'stream.jsonl')
@@ -43,6 +44,27 @@ const MIN_TURNS = 4
 const MAX_CHARS = 3200
 const integrity = createIntegrity(ROOT, ['stream.jsonl', 'marks.jsonl'])
 const MEMAINT = join(dirname(fileURLToPath(import.meta.url)), 'mem-maintenance.mjs')
+const SELF = fileURLToPath(import.meta.url)
+const INDEX_LOCK = join(ROOT, '.index-building')
+
+function maybeIndex() {
+  const built = indexBuiltAt(ROOT)
+  if (built && Date.now() - built < 24 * 3600e3 && indexFresh(ROOT)) return
+  try {
+    if (existsSync(INDEX_LOCK)) {
+      const age = Date.now() - statSync(INDEX_LOCK).mtimeMs
+      if (age < 5 * 60e3) return
+      unlinkSync(INDEX_LOCK)
+    }
+    writeFileSync(INDEX_LOCK, String(process.pid), 'utf8')
+    const child = spawn(process.execPath, [SELF, 'index', 'build'], {
+      detached: true, stdio: 'ignore', windowsHide: true, env: process.env,
+    })
+    child.on('error', (e) => diag('索引进程失败：' + e.message))
+    child.on('exit', (code) => { if (code) diag('索引进程退出：' + code) })
+    child.unref()
+  } catch (e) { diag('索引启动失败：' + e.message) }
+}
 
 function maybeMaintenance() {
   if (process.env.WORKBUDDY_DISABLE_MAINTENANCE === '1') return
@@ -259,6 +281,7 @@ function append(cwd, rec) {
   try {
     appendFileSync(STREAM, JSON.stringify(out) + '\n', 'utf8')
     try { integrity.record('stream.jsonl') } catch (e) { diag('检查点更新失败：' + e.message) }
+    try { appendIndex(ROOT, out, tokenize) } catch (e) { diag('索引追加失败：' + e.message) }
     return 0
   } catch (e) {
     diag('写流失败：' + e.message)
@@ -556,6 +579,31 @@ function probes(raw) {
   return out.slice(0, 5)
 }
 
+// 派生索引版预激活：FTS 只负责找候选，episode 元数据从 SQLite 读；
+// 索引缺失/出错返回 null，调用方回退到原来的全量 prime。
+function primeFromIndex(cue, opts = {}) {
+  const rows = searchIndex(ROOT, cue, 80, tokenize)
+  if (!rows) return null
+  const ids = [...new Set(rows.map((r) => r.episode_id).filter(Boolean))]
+  const eps = episodesByIds(ROOT, ids)
+  const byId = new Map(eps.map((e) => [e.id, e]))
+  const recent = new Set((indexStore(ROOT, 2)?.episodes || []).map((e) => e.id))
+  const freshCut = Date.now() - (opts.freshMin || 20) * 60 * 1000
+  const groups = new Map()
+  for (const r of rows) {
+    if (!r.episode_id) continue
+    const ep = byId.get(r.episode_id)
+    if (!ep) continue
+    if (ep.endTs >= freshCut || recent.has(ep.id)) continue
+    if (opts.excludeSid && ep.sid === opts.excludeSid) continue
+    const ageDays = Math.max(0, (Date.now() - ep.endTs) / 86400000)
+    const score = (-Number(r.rank || 0)) * recencyOf(ageDays, ep.salience, ep.emotion, cfg.recency) * (1 + (ep.salience || 0))
+    const g = groups.get(ep.id)
+    if (!g || score > g.score) groups.set(ep.id, { ep, score })
+  }
+  return [...groups.values()].sort((a, b) => b.score - a.score).slice(0, opts.max || cfg.primeMax)
+}
+
 function traceHits(store, raw, ws = null) {
   const docs = store.docs
   const scan = (needle, dropQuotes) => {
@@ -651,13 +699,14 @@ function arriveBlock(store) {
   }
   const eps = store.episodes
   const recent = [...eps].sort((a, b) => b.endTs - a.endTs).slice(0, cfg.arrivalEpisodes)
-  const says = store.docs.filter((d) => d && (d.who === 'he' || d.who === 'me')).length
-  const first = Math.min(...eps.map((e) => e.startTs))
-  const last = Math.max(...eps.map((e) => e.endTs))
+  const says = store.says ?? store.docs.filter((d) => d && (d.who === 'he' || d.who === 'me')).length
+  const total = store.episodeCount || eps.length
+  const first = store.firstTs ?? Math.min(...eps.map((e) => e.startTs))
+  const last = store.lastTs ?? Math.max(...eps.map((e) => e.endTs))
   const lines = recent.map((e) => ` #${e.id} ${mdOf(e.startTs)} ${clockOf(e.startTs)} ${e.turns} 回合${e.ws ? '〔' + e.ws + '〕' : ''} · ${e.title}`)
   return [
     '【记忆·醒来】这份是我自己记的（self-memory），不是别人给的摘要。',
-    `${eps.length} 段 / ${says} 句原话 · ${dayOf(first)} → ${dayOf(last)}`,
+    `${total} 段 / ${says} 句原话 · ${dayOf(first)} → ${dayOf(last)}`,
     '最近：',
     ...lines,
     ...(markLines.length ? ['记下的：', ...markLines] : []),
@@ -831,7 +880,13 @@ function runHook() {
   const sid = p.session_id || null
 
   if (ev === 'SessionStart') {
-    writeOut({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: arriveBlock(openStore()) } })
+    let store = null
+    try {
+      store = indexStore(ROOT, cfg.arrivalEpisodes)
+      if (store) store.marks = readMarks()
+    } catch {}
+    writeOut({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: arriveBlock(store || openStore()) } })
+    maybeIndex()
     maybeMaintenance()
     return
   }
@@ -847,9 +902,13 @@ function runHook() {
       eventKey: messageID ? `user:${sid || ''}:${messageID}` : null,
       source: { type: 'hook.user_prompt', messageID },
     })
-    const store = openStore()
-    if (!store) return
-    const hits = prime(store, prompt, { max: cfg.primeMax, excludeSid: sid, maxDf: cfg.primeMaxDf, freshMin: cfg.primeFreshMin })
+    let hits = null
+    try { hits = primeFromIndex(prompt, { max: cfg.primeMax, excludeSid: sid, freshMin: cfg.primeFreshMin }) } catch {}
+    if (hits === null) {
+      const store = openStore()
+      if (!store) return
+      hits = prime(store, prompt, { max: cfg.primeMax, excludeSid: sid, maxDf: cfg.primeMaxDf, freshMin: cfg.primeFreshMin })
+    }
     const block = primeBlock(hits)
     if (block) writeOut({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } })
     return
@@ -921,6 +980,7 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs maintenance --backup
   node mem.mjs maintenance --verify
   node mem.mjs maintenance --prune          默认只试算
+  node mem.mjs index build                  重建派生检索索引（SQLite FTS）
 
   参数：--ws <工作区子串>  --limit n  --full
   数据：${STREAM}`)
@@ -930,6 +990,15 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
 if (cmd === 'maintenance') {
   const r = spawnSync(process.execPath, [MEMAINT, ...args], { stdio: 'inherit', windowsHide: true, env: process.env })
   process.exit(r.status || 0)
+}
+
+if (cmd === 'index') {
+  const store = openStore()
+  if (!store) { console.log('（没有记忆流，先聊几句再建索引）'); process.exit(0) }
+  const r = buildIndex(ROOT, store, tokenize)
+  try { if (existsSync(INDEX_LOCK)) unlinkSync(INDEX_LOCK) } catch {}
+  console.log(JSON.stringify(r))
+  process.exit(r.ok ? 0 : 1)
 }
 
 if (cmd === 'remember') {
