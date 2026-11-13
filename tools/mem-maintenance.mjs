@@ -59,8 +59,12 @@ function lock(fn) {
           try { process.kill(owner.pid, 0) } catch (probe) {
             if (probe.code === 'ESRCH') { fs.rmSync(dir, { recursive: true, force: true }); continue }
           }
+        } else {
+          if (Date.now() - fs.statSync(dir).mtimeMs > 30000) { fs.rmSync(dir, { recursive: true, force: true }); continue }
         }
-      } catch {}
+      } catch {
+        try { if (Date.now() - fs.statSync(dir).mtimeMs > 30000) { fs.rmSync(dir, { recursive: true, force: true }); continue } } catch {}
+      }
       if (Date.now() - started > 10000) throw new Error('maintenance is busy')
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
     }

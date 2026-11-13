@@ -275,6 +275,18 @@ test('verify 不抢写锁；死亡进程留下的锁可自动回收', () => {
   assert.equal(fs.existsSync(lock), false)
 })
 
+test('空 owner 的旧锁（软件更新杀进程）可自动回收', () => {
+  core.append({ text: 'before empty lock' })
+  const lock = path.join(root, '.journal-lock')
+  fs.mkdirSync(lock)
+  fs.writeFileSync(path.join(lock, 'owner.json'), '')
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(lock, old, old)
+  const row = core.append({ text: 'after empty owner lock' })
+  assert.ok(row && row.seq > 0)
+  assert.equal(fs.existsSync(lock), false)
+})
+
 test('维护 CLI：快照、verify、due 幂等', () => {
   core.append({ text: 'maintenance test' })
   const maint = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'mem-maintenance.mjs')

@@ -50,18 +50,26 @@ export function createJournal(root) {
         if (error.code !== 'EEXIST') throw error
         // 上一个持有者如果是崩溃退出，锁会永久留在盘上。只回收能确认已死亡的 PID，
         // 不按年龄强拆活进程的锁；owner 文件缺失/损坏时留给 unlock 人工处理。
-        try {
-          const owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'))
-          if (Number.isInteger(owner.pid) && owner.pid > 0) {
-            try { process.kill(owner.pid, 0) } catch (probe) {
-              if (probe.code === 'ESRCH') {
-                fs.rmSync(path.join(lock, 'owner.json'), { force: true })
-                fs.rmdirSync(lock)
-                continue
-              }
+        let owner = null
+        try { owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')) } catch {}
+        if (owner && Number.isInteger(owner.pid) && owner.pid > 0) {
+          try { process.kill(owner.pid, 0) } catch (probe) {
+            if (probe.code === 'ESRCH') {
+              fs.rmSync(lock, { recursive: true, force: true })
+              continue
             }
           }
-        } catch {}
+        } else {
+          // 软件更新/崩溃可能停在 mkdir 和 owner.json 之间，留下空 owner。
+          // 只有锁已经老到不可能还是“刚创建、正在写 owner”的活进程，才回收。
+          try {
+            const age = Date.now() - fs.statSync(lock).mtimeMs
+            if (age > 30000) {
+              fs.rmSync(lock, { recursive: true, force: true })
+              continue
+            }
+          } catch {}
+        }
         if (Date.now() - started > timeoutMs) throw new Error('Memory journal is busy; use unlock only after its writer has stopped')
         sleep(10)
       }
@@ -167,14 +175,19 @@ export function createJournal(root) {
   function unlock() {
     const lock = path.join(root, '.journal-lock')
     if (!fs.existsSync(lock)) return false
-    const owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'))
+    let owner
+    try { owner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')) } catch {
+      // 空/坏 owner：只有锁已经老到不可能是“正在创建”的活进程，才允许清理。
+      const age = Date.now() - fs.statSync(lock).mtimeMs
+      if (age > 30000) { fs.rmSync(lock, { recursive: true, force: true }); return true }
+      throw new Error('Invalid lock owner and lock is recent; inspect manually')
+    }
     if (!Number.isInteger(owner.pid) || owner.pid <= 0) throw new Error('Invalid lock owner; inspect manually')
     try { process.kill(owner.pid, 0); throw new Error('Writer is still alive; refusing to unlock') } catch (error) {
       if (error.code !== 'ESRCH') throw error
     }
     // An abandoned lock is never removed by competing appenders.
-    fs.rmSync(path.join(lock, 'owner.json'))
-    fs.rmdirSync(lock)
+    fs.rmSync(lock, { recursive: true, force: true })
     return true
   }
   return { root, append, updateJson, verify: () => inspectAll(), sync, unlock,

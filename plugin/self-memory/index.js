@@ -1,5 +1,5 @@
 // OpenCode entrypoint. Capture and retrieval stay testable without a running server.
-// Runtime generation 18: Code Mode tool detection, compact injection, cached capture, maintenance.
+// Runtime generation 19: empty-owner lock reclaim, Code Mode tool detection, compact injection.
 import { Plugin } from '@opencode/plugin'
 import fs from 'node:fs'
 import path from 'node:path'
