@@ -12,10 +12,18 @@ export function createCapture(core, ws) {
   const assistantSeen = new Map()
   const processedMessages = new Set()
   const lastUserBySid = new Map()
+  const rememberAssistant = (sid, messageID, text, row) => {
+    const slot = `${sid || ''}|${messageID || ''}`
+    const key = String(text || '').replace(/\s+/g, ' ').trim()
+    let m = assistantSeen.get(slot)
+    if (!m) { m = new Map(); assistantSeen.set(slot, m) }
+    if (row) m.set(key, row)
+    return m.get(key)
+  }
   for (const r of all) {
     if (r.who === 'user') lastUserBySid.set(r.sid, r)
     if (r.kind === 'message' && r.who === 'assistant' && r.messageID) {
-      assistantSeen.set(`${r.sid || ''}|${r.messageID}|${r.ordinal ?? 0}`, r)
+      rememberAssistant(r.sid, r.messageID, r.text, r)
     }
   }
   // 工具事件很频繁；每次 before/after 都重读整个 tools.jsonl 会随库增长变慢。
@@ -55,19 +63,16 @@ export function createCapture(core, ws) {
     // 流式回答会以多个中间版本出现。同一消息同一段只留「首次观察」和「最终完成」两版，
     // 不按正文 hash 建键——否则每个增量都会变成一条独立记忆。
     const stage = completion === 'completed' || completion === 'text-ended' ? 'final' : 'observed'
-    const slot = `${sid || ''}|${messageID}|${ordinal ?? 0}`
-    const seen = assistantSeen.get(slot)
-    // 同一段已经有相同正文：不再写第二份。真实场景里 context 和 text.ended
-    // 经常先后拿到同一段完整文本，这正是重复 top-2 的来源。
-    if (seen && String(seen.text) === String(text)) return seen
-    // 已经有最终版时，迟到的中间观察不再补记。
-    if (seen && stage === 'observed' && (seen.completion === 'completed' || seen.completion === 'text-ended')) return seen
+    const seen = rememberAssistant(sid, messageID, text)
+    // 同一消息里已经有相同正文：不再写第二份。上游会把同一段拆成不同 ordinal，
+    // 所以键是 messageID + 正文，不是 ordinal。
+    if (seen) return seen
     const eventKey = keyOf('assistant', sid, messageID, ordinal, stage)
     const prior = known.get(eventKey)
     if (prior) return prior
     const saved = rememberEvent({ who: 'assistant', kind: 'message', ws, sid, messageID, ordinal, turnID, text, ts, completion,
       source: { type: 'session.text', messageID, ordinal }, eventKey })
-    if (saved) assistantSeen.set(slot, saved)
+    if (saved) rememberAssistant(sid, messageID, text, saved)
     return saved
   }
   function messages(sid, list) {

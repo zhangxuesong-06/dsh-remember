@@ -37,6 +37,7 @@ test('同一消息的 observed/final 同文只留一条；recall 视图去重', 
   c.user('s', 'u', '问', 1)
   c.assistant('s', 'm1', 0, '同一段最终回答', 2, null, 'observed')
   c.assistant('s', 'm1', 0, '同一段最终回答', 3, null, 'text-ended')
+  c.assistant('s', 'm1', 1, '同一段最终回答', 4, null, 'completed')
   assert.equal(core.trace('同一段最终回答').length, 1)
   core.append({ who: 'assistant', kind: 'message', sid: 's', messageID: 'm2', ordinal: 0, text: '重复视图测试内容足够长，用来验证派生去重。' })
   core.append({ who: 'assistant', kind: 'message', sid: 's', messageID: 'm2', ordinal: 0, text: '重复视图测试内容足够长，用来验证派生去重。' })

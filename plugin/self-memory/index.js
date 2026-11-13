@@ -1,5 +1,5 @@
 // OpenCode entrypoint. Capture and retrieval stay testable without a running server.
-// Runtime generation 20: cached read/recall indexes, Code Mode hint, lock recovery, compact injection.
+// Runtime generation 21: messageID+text assistant dedupe, cached reads, WB FTS index.
 import { Plugin } from '@opencode/plugin'
 import fs from 'node:fs'
 import path from 'node:path'
