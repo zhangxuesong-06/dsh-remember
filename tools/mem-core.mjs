@@ -12,8 +12,18 @@ import { createJournal } from './mem-journal.mjs'
 import { verifyBlobs, readBlob } from './mem-artifacts.mjs'
 import { facetsOf, parseScope, matchScope, expandQuery, buildMap, vocabFromAliases, suggestAlias } from './mem-facets.mjs'
 import { buildAssoc, expandAssoc, assocStats } from './mem-assoc.mjs'
+import { tok } from './mem-tokenize.mjs'
 
-export const ROOT = process.env.OPENCODE_MEM_HOME || path.join(os.homedir(), '.opencode-mem')
+export { tok }
+
+export const ROOT = process.env.OPENCODE_MEM_HOME || defaultRoot()
+
+function defaultRoot() {
+  const shared = path.join(os.homedir(), '.agent-memory', 'opencode')
+  const legacy = path.join(os.homedir(), '.opencode-mem')
+  // 迁移完成后自动走共享仓库；迁移前继续用旧目录。
+  return fs.existsSync(shared) ? shared : legacy
+}
 export const STREAM = path.join(ROOT, 'stream.jsonl')
 export const MARKS = path.join(ROOT, 'marks.jsonl')
 export const PINS = path.join(ROOT, 'pins.json')
@@ -85,20 +95,6 @@ export function mark(text, key = null, ws = '') {
   const row = journal.append('marks.jsonl', { key, ws, text: String(text || '') })
   append({ who: 'assistant', kind: 'note', text: row.text, ws, source: { markID: row.id }, eventKey: 'mark:' + row.id })
   return row
-}
-
-// —— 分词：中文 bigram + 英文词 ——
-const CJK = /[\u4e00-\u9fff]+/g
-const LATIN = /[a-zA-Z][a-zA-Z0-9_.\-]*/g
-export function tok(s) {
-  const o = []
-  for (const m of String(s).matchAll(CJK)) {
-    const r = m[0]
-    if (r.length === 1) o.push(r)
-    else for (let i = 0; i + 1 < r.length; i++) o.push(r.slice(i, i + 2))
-  }
-  for (const m of String(s).matchAll(LATIN)) o.push(m[0].toLowerCase())
-  return o
 }
 
 const DAY = 864e5

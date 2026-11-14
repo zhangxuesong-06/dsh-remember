@@ -86,8 +86,28 @@ node tools/mem.mjs verify
 node tools/mem.mjs health
 node tools/mem.mjs replay
 node tools/eval-recall.mjs --grid
+node agent-memory/recall.mjs sources
+node agent-memory/recall.mjs recall "kgnav 孤岛"
+node agent-memory/recall.mjs trace "扫码走局域网"
+node agent-memory/migrate.mjs
 node --test tools/tests/memory.test.mjs
+node --test agent-memory/recall.test.mjs
+node --test agent-memory/migrate.test.mjs
 ```
+
+跨 harness 查询是只读的：三个库各自仍是唯一真相，不合并、不改写、不自动注入。默认只查对话和派生记录，工具行加 `--with-tools`。结果里的 `opencode:2251`、`dsh:812`、`workbuddy:1002` 可以直接用 `show` 回读原文。
+
+迁移到共享仓库后，三个库放在同一个根目录下：
+
+```text
+~/.agent-memory/
+  manifest.json
+  opencode/stream.jsonl
+  dsh/<工作区>/stream.jsonl
+  workbuddy/stream.jsonl
+```
+
+`node agent-memory/migrate.mjs` 默认只做 dry-run；关闭三个 harness 后用 `--apply` 复制。旧目录保留不动；切换后如果还没有新记录，删除共享目录即可回退。一旦共享库开始写入，回退需要先把共享流复制回旧路径。三个写入端在 `~/.agent-memory/<harness>` 存在后自动切换，迁移前继续用旧路径。
 
 `stream.jsonl` 保存消息和可检索任务索引，`tools.jsonl` 保存操作事件，`episodes.jsonl` 保存任务关联，`blobs/` 保存按 SHA-256 寻址的完整工具证据和文件版本。原始工具证据不进入常规检索。`integrity.json` 是当前字节基线，能发现已纳入基线的记录被修改、删除、重排或截去尾部。
 

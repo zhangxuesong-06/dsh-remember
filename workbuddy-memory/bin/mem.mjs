@@ -31,7 +31,13 @@ import { fileURLToPath } from 'node:url'
 import { createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs } from './mem-evidence.mjs'
 import { buildIndex, appendIndex, searchIndex, indexStore, episodesByIds, indexBuiltAt, indexFresh } from './mem-index.mjs'
 
-const ROOT = process.env.WORKBUDDY_MEM_HOME || join(homedir(), '.workbuddy', 'mem')
+function defaultRoot() {
+  const shared = join(homedir(), '.agent-memory', 'workbuddy')
+  const legacy = join(homedir(), '.workbuddy', 'mem')
+  // 迁移完成后自动走共享仓库；迁移前继续用旧目录。
+  return existsSync(shared) ? shared : legacy
+}
+const ROOT = process.env.WORKBUDDY_MEM_HOME || defaultRoot()
 const STREAM = join(ROOT, 'stream.jsonl')
 const MARKS = join(ROOT, 'marks.jsonl')
 const PENDING = join(ROOT, 'pending.json')

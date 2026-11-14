@@ -54,6 +54,9 @@ node tools/mem.mjs health
 node tools/mem.mjs verify
 node tools/eval-recall.mjs            # 真实提问 → 当时回答的召回评测
 node tools/eval-recall.mjs --grid     # 对比打分参数
+node --test agent-memory/recall.test.mjs
+node --test agent-memory/migrate.test.mjs
+node agent-memory/migrate.mjs         # 共享仓库 dry-run
 ```
 
 测试使用独立临时库，不修改真实记忆。覆盖完整长文本、重复来源、成功/失败操作、前后版本、投影中断重放、损坏检测、合法尾部恢复、并发进程、背景副本、最后回答事件及工作区过滤。
@@ -82,6 +85,40 @@ node tools/eval-recall.mjs --grid     # 对比打分参数
 DSH 的 `session/event` 在同一进程连续到达，调用/结果用内存 Map 配对；进程重启会丢掉配对，此时结果仍落盘，但前版本标 `unknown`。WorkBuddy 每个 hook 是独立进程，所以配对写在 `pending.json`，超过 6 小时未配对的条目会被清掉。
 
 两个实现都保留“旧数据不改写”：首次 `sync` 只建立当前基线，`noHash` / `UNTRACKED` 会明确显示；`dedup` / `compact --apply` 不再改写原始账本。已用隔离临时库验证长文本、来源去重、成功/失败写入、前后版本、篡改/删行/截尾检测、合法尾部接纳和重放幂等。DSH 原有 `selftest` 100/100、`smoke` 59/59 仍通过；WorkBuddy 新增测试 13/13 通过。实机只做了只读打开、`sync` 建基线和 `verify`/`health`，没有伪造真实会话做端到端召回测试。
+
+## 跨 harness 只读查询
+
+`agent-memory/recall.mjs` 用同一套 BM25 同时查三个库，但不合并、不改写：
+
+```bash
+node agent-memory/recall.mjs sources
+node agent-memory/recall.mjs recall "kgnav 孤岛" -n 8
+node agent-memory/recall.mjs recall "题库" --source workbuddy --since 30d
+node agent-memory/recall.mjs trace "扫码走局域网"
+node agent-memory/recall.mjs show dsh:812
+```
+
+边界：
+
+- 只调用 `readFileSync` / `statSync` / `readdirSync`，不建目录、不拿锁、不写缓存；
+- 不 import `mem-core` / `mem-journal`，分词来自独立的 `mem-tokenize.mjs`；
+- 三个库各自仍是唯一真相，结果只标 `opencode` / `dsh` / `workbuddy`；
+- 默认只收对话、笔记、决策、段落、产物；DSH 和 WorkBuddy 的流里九成是工具行，要用 `--with-tools` 显式打开；
+- 引用用 JSONL 行号（只追加，所以稳定）；DSH 多工作区时是 `dsh:<工作区>:<行号>`。
+
+实测（2026-11-14，OpenCode 2,657 + DSH 1,077 + WorkBuddy 1,145 条）：单次查询约 85–110 ms，六次查询含冷启动约 535 ms。测试 13/13 通过，其中包括“运行前后三个 `stream.jsonl` 哈希与目录列表完全一致”的只读断言。当前不做别名跨库扩展、不做自动注入；需要时由模型显式调用。
+
+共享仓库把三条流放进同一个根：
+
+```text
+~/.agent-memory/
+  manifest.json
+  opencode/stream.jsonl
+  dsh/<工作区>/stream.jsonl
+  workbuddy/stream.jsonl
+```
+
+`agent-memory/migrate.mjs` 默认 dry-run，`--apply` 才复制；先写 staging、校验文件数和大小、再原子改名。只复制不移动，旧目录保留；`runtime` / `snapshots` / `assoc.json` / `index.db` 不搬。三个写入端在共享目录存在后自动切换。切换后还没有新记录时，删除 `~/.agent-memory` 即可回退；一旦共享库开始写入，先把共享流复制回旧路径再删。迁移必须在三个 harness 关闭时执行，复制期间检测到源库变化会中止。
 
 ## Token 与维护
 

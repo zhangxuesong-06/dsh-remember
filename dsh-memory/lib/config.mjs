@@ -3,13 +3,23 @@
 // 一个工作区 = 一条「身份线」的记忆库。换文件夹就是换一个人，
 // 同一个文件夹里两只就会串——这是上一轮踩过的坑，这里用目录直接钉死。
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 
 export const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
-export const HOME = join(DSH_HOME, 'dsh-memory')
+
+function memoryHome() {
+  if (process.env.DSH_MEMORY_HOME) return process.env.DSH_MEMORY_HOME
+  const shared = join(homedir(), '.agent-memory', 'dsh')
+  const legacy = join(DSH_HOME, 'dsh-memory')
+  // 显式 DSH_HOME 的安装继续用旧布局；默认安装迁移后走共享仓库。
+  if (process.env.DSH_HOME) return legacy
+  return existsSync(shared) ? shared : legacy
+}
+
+export const HOME = memoryHome()
 export const CFG_PATH = join(HOME, 'config.json')
 // 上一份「读得动」的配置。读坏的时候退到这里，而不是拿默认值把用户的名单盖掉。
 export const CFG_BAK = join(HOME, 'config.json.bak')

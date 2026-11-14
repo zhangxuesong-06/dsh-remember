@@ -7,13 +7,18 @@
   "exports": {
     ".": "./detect.mjs",
     "./install": "./install.mjs",
+    "./recall": "./recall.mjs",
+    "./repo": "./repo.mjs",
+    "./migrate": "./migrate.mjs",
     "./package.json": "./package.json"
   },
   "bin": {
     "agent-memory": "./install.mjs"
   },
   "scripts": {
-    "test": "node test.mjs"
+    "test": "node test.mjs",
+    "test:recall": "node --test recall.test.mjs",
+    "test:migrate": "node --test migrate.test.mjs"
   },
   "license": "MIT"
 }

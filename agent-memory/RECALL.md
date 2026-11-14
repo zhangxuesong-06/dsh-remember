@@ -1,0 +1,94 @@
+# 跨 harness 只读查询
+
+目标：在 OpenCode 里也能找到 DSH、WorkBuddy 里做过的事，但不合并三个库。
+
+## 边界
+
+- 只读：`readFileSync` / `statSync` / `readdirSync`，不建目录、不拿锁、不写缓存；
+- 不 import `mem-core` / `mem-journal`；分词来自独立的 `mem-tokenize.mjs`；
+- 三个库各自仍是唯一真相，结果只标 `opencode` / `dsh` / `workbuddy`；
+- 不自动注入到每次对话，按需调用。
+
+## 数据源
+
+共享布局（迁移后）：
+
+```text
+~/.agent-memory/
+  manifest.json
+  opencode/stream.jsonl
+  dsh/<工作区>/stream.jsonl
+  workbuddy/stream.jsonl
+```
+
+迁移前或显式设置环境变量时，回退到旧布局：
+
+| 来源 | 共享路径 | 旧路径 |
+|---|---|---|
+| OpenCode | `~/.agent-memory/opencode/stream.jsonl` | `OPENCODE_MEM_HOME` 或 `~/.opencode-mem/stream.jsonl` |
+| DSH | `~/.agent-memory/dsh/<工作区>/stream.jsonl` | `DSH_HOME/dsh-memory/<工作区>/stream.jsonl` |
+| WorkBuddy | `~/.agent-memory/workbuddy/stream.jsonl` | `WORKBUDDY_MEM_HOME` 或 `~/.workbuddy/mem/stream.jsonl` |
+
+DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收对话、笔记、决策、段落、产物；工具行用 `--with-tools` 显式打开。
+
+## 迁移
+
+```bash
+node agent-memory/migrate.mjs            # dry-run，只出计划
+node agent-memory/migrate.mjs --apply    # 关闭三个 harness 后执行
+```
+
+- 先写 staging，校验文件数和大小后原子改名；
+- 只复制，不移动；旧目录原样保留；
+- `runtime`、`snapshots`、`assoc.json`、`index.db` 不搬，可重建；
+- 复制过程中源库有写入就中止，要求先关闭 harness；
+- 回退：切换后还没有新记录时，删除 `~/.agent-memory`，三个写入端自动回到旧路径；一旦共享库开始写入，先把共享流复制回旧路径再删。
+
+## 命令
+
+```bash
+node agent-memory/recall.mjs sources
+node agent-memory/recall.mjs recall "kgnav 孤岛" -n 8
+node agent-memory/recall.mjs recall "题库" --source workbuddy --since 30d
+node agent-memory/recall.mjs recall "派生索引" --with-tools --json
+node agent-memory/recall.mjs trace "扫码走局域网"
+node agent-memory/recall.mjs show dsh:812
+```
+
+引用格式是 `source:line`；DSH 多工作区时是 `dsh:<工作区>:<line>`。JSONL 只追加，所以行号稳定。
+
+## 打分
+
+和 OpenCode 的 `recall` 保持一致：
+
+```text
+BM25(K1=1.25, B=0.72) × 新鲜加分 × 类别权重
+新鲜加分 = 1 + 0.5 × 0.5^(天数/3)
+覆盖率阈值 0.2
+```
+
+类别权重：普通记录 1.0 · artifact 0.85 · episode 0.55 · meta 会话标题 0.4 · 工具行 0.35。
+
+去重只作用于结果视图：
+
+- 长文本按正文前 120 字折叠，跨会话也折叠（每日重复模板只占一个位置）；
+- 短文本保留 sid 区分；
+- 跨库不合并，同一件事在两个库各记一份就保留两条并标来源。
+
+## 验收
+
+2026-11-14 实测：
+
+```text
+OpenCode 2,657 条 · DSH 1,077 条（对话 191）· WorkBuddy 1,145 条（对话 109）
+单次查询        85–110 ms
+六次查询冷启动  535 ms
+测试            13 / 13
+只读断言        三个 stream.jsonl 哈希与目录列表运行前后一致
+```
+
+## 限制
+
+- 不做跨库别名扩展和语义检索；
+- 不自动注入，避免每轮对话背三个库的开销；
+- DSH 的工作区隔离仍然保留，只在结果里标出目录名。
