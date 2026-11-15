@@ -147,6 +147,102 @@ export function migrate({ apply = false } = {}) {
   }
 }
 
+function readBytes(file) {
+  try { return fs.readFileSync(file) } catch { return null }
+}
+
+function jsonlPrefix(buf) {
+  if (!buf || !buf.length) return Buffer.alloc(0)
+  if (buf[buf.length - 1] === 0x0a) return buf
+  const cut = buf.lastIndexOf(0x0a)
+  return cut >= 0 ? buf.subarray(0, cut + 1) : Buffer.alloc(0)
+}
+
+function copyAtomic(src, dst) {
+  fs.mkdirSync(path.dirname(dst), { recursive: true })
+  const tmp = `${dst}.sync-${process.pid}-${Math.random().toString(16).slice(2)}`
+  fs.copyFileSync(src, tmp)
+  try {
+    fs.renameSync(tmp, dst)
+  } catch {
+    fs.rmSync(dst, { force: true })
+    fs.renameSync(tmp, dst)
+  }
+}
+
+function syncStream(src, dst, trim = false) {
+  const a = trim ? jsonlPrefix(readBytes(src)) : readBytes(src)
+  const b = readBytes(dst)
+  if (a === null) return { ok: true, missing: true }
+  if (!b) { copyAtomic(src, dst); return { ok: true, copied: true } }
+  if (a.equals(b)) return { ok: true }
+  if (b.length <= a.length && a.subarray(0, b.length).equals(b)) {
+    copyAtomic(src, dst)
+    return { ok: true, copied: true }
+  }
+  if (a.length <= b.length && b.subarray(0, a.length).equals(a)) return { ok: true, ahead: true }
+  return { ok: false, reason: '流已分叉' }
+}
+
+function mirrorFiles(srcRoot, dstRoot) {
+  if (!fs.existsSync(srcRoot)) return
+  for (const ent of fs.readdirSync(srcRoot, { withFileTypes: true })) {
+    if (ent.isDirectory()) {
+      if (SKIP_DIRS.has(ent.name)) continue
+      mirrorFiles(path.join(srcRoot, ent.name), path.join(dstRoot, ent.name))
+      continue
+    }
+    if (ent.name === 'stream.jsonl' || SKIP_FILES.has(ent.name)) continue
+    const src = path.join(srcRoot, ent.name)
+    const dst = path.join(dstRoot, ent.name)
+    let st; try { st = fs.statSync(src) } catch { continue }
+    let dt = null; try { dt = fs.statSync(dst) } catch {}
+    if (!dt || dt.size !== st.size || dt.mtimeMs < st.mtimeMs) copyAtomic(src, dst)
+  }
+}
+
+// 增量同步：共享仓库已经存在时，把旧库新增的尾部接上。
+// 只有共享流是旧库的前缀时才继续；两边都长出新内容就拒绝，避免猜。
+export function sync() {
+  const p = paths()
+  if (!fs.existsSync(p.shared.root)) return { ok: false, reason: '共享仓库不存在，请先 --apply' }
+  const results = []
+  try {
+    for (const source of ['opencode', 'dsh', 'workbuddy']) {
+      const from = p.legacy[source]
+      const to = p.shared[source]
+      if (!fs.existsSync(from)) { results.push({ source, skipped: true }); continue }
+      if (source === 'dsh') {
+        let dirs = []
+        try { dirs = fs.readdirSync(from, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) } catch {}
+        for (const ws of dirs) {
+          const srcStream = path.join(from, ws, 'stream.jsonl')
+          if (!fs.existsSync(srcStream)) continue
+          const r = syncStream(srcStream, path.join(to, ws, 'stream.jsonl'), true)
+          if (!r.ok) return { ok: false, reason: `dsh/${ws}：${r.reason}` }
+          mirrorFiles(path.join(from, ws), path.join(to, ws))
+        }
+      } else {
+        const r = syncStream(path.join(from, 'stream.jsonl'), path.join(to, 'stream.jsonl'), true)
+        if (!r.ok) return { ok: false, reason: `${source}：${r.reason}` }
+        mirrorFiles(from, to)
+      }
+      results.push({ source, ...streamStats(to, source) })
+    }
+    const manifestPath = path.join(p.shared.root, 'manifest.json')
+    let manifest = {}
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) } catch {}
+    manifest.version = manifest.version || 1
+    manifest.syncedAt = new Date().toISOString()
+    manifest.streams = Object.fromEntries(results.filter((r) => !r.skipped).map((r) => [r.source, {
+      records: r.records, bytes: r.bytes, ...(r.workspaces ? { workspaces: r.workspaces } : {}),
+    }]))
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+    return { ok: true, synced: true, shared: p.shared.root, streams: manifest.streams }
+  } catch (error) {
+    return { ok: false, reason: error.message }
+  }
+}
 function printPlan(p) {
   console.log(`共享仓库：${p.shared}${p.exists ? '（已存在）' : ''}`)
   for (const item of p.items) {
@@ -159,7 +255,22 @@ function printPlan(p) {
 const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (isMain) {
   const apply = process.argv.includes('--apply')
+  const doSync = process.argv.includes('--sync')
   const json = process.argv.includes('--json')
+  if (doSync) {
+    const r = sync()
+    if (json) console.log(JSON.stringify(r, null, 2))
+    else if (r.ok) {
+      console.log(`已同步到 ${r.shared}`)
+      for (const [source, s] of Object.entries(r.streams)) {
+        console.log(`  ${source.padEnd(9)} records=${s.records}${s.workspaces ? ` workspaces=${s.workspaces}` : ''}`)
+      }
+    } else {
+      console.error('同步失败：' + r.reason)
+      process.exitCode = 1
+    }
+    process.exit(process.exitCode || 0)
+  }
   if (!apply) {
     const p = plan()
     if (json) console.log(JSON.stringify(p, null, 2))

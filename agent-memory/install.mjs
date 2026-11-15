@@ -76,8 +76,9 @@ function printHelp() {
   node agent-memory/install.mjs --harness dsh --workspace "D:\\deepseek harness"
   node agent-memory/install.mjs --harness opencode
   node agent-memory/install.mjs --harness workbuddy
+  node agent-memory/install.mjs --harness zcode
 
-  --harness auto|dsh|opencode|workbuddy   默认 auto：只自动选已装过记忆的那个
+  --harness auto|dsh|opencode|workbuddy|zcode   默认 auto：只自动选已装过记忆的那个
   --workspace <路径>                       DSH 首次安装时写入的工作区
   --dry-run                                只打印计划，不写任何文件
   --json                                   用 JSON 输出识别结果

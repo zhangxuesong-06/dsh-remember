@@ -14,10 +14,12 @@ const ocRoot = path.join(tmp, 'oc')
 const dshHome = path.join(tmp, 'dsh')
 const wbRoot = path.join(tmp, 'wb')
 const dshStore = path.join(dshHome, 'dsh-memory', 'ws-alpha')
+const zcRoot = path.join(tmp, 'zc')
 
 process.env.OPENCODE_MEM_HOME = ocRoot
 process.env.DSH_HOME = dshHome
 process.env.WORKBUDDY_MEM_HOME = wbRoot
+process.env.ZCODE_MEM_HOME = zcRoot
 
 const cross = await import('./recall.mjs')
 
@@ -51,21 +53,29 @@ function fixtures() {
     { who: 'me', type: 'artifact', ws: '2026-11-12-21-33', sid: 's-wb', ts: NOW - 3 * DAY + 2000, text: '写入 quiz-bank.json；工具 write 已完成' },
     { who: 'act', type: 'tool/call', ws: '2026-11-12-21-33', sid: 's-wb', tool: 'Bash', ts: NOW - 3 * DAY + 3000, text: 'cat quiz-bank.json' },
   ])
+  writeJsonl(path.join(zcRoot, 'stream.jsonl'), [
+    { who: 'he', type: 'user/message', ws: 'c:\\users\\huawei\\desktop\\work\\记忆', wsName: '记忆', sid: 's-zc', turn: 1, ts: NOW - 1 * DAY, text: '给 ZCode 装一个共享记忆插件。' },
+    { who: 'me', type: 'assistant/message', ws: 'c:\\users\\huawei\\desktop\\work\\记忆', wsName: '记忆', sid: 's-zc', turn: 1, ts: NOW - 1 * DAY + 1000, text: 'ZCode 用钩子加 MCP，数据写 ~/.agent-memory/zcode。' },
+    { who: 'meta', type: 'session/title', ws: 'c:\\users\\huawei\\desktop\\work\\记忆', wsName: '记忆', sid: 's-zc', ts: NOW - 1 * DAY + 2000, text: '这个对话叫「ZCode 共享记忆」' },
+  ])
 }
 
 beforeEach(fixtures)
 after(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
-test('三个库都能读，he/me/act/meta 归一化正确，工具行默认不收', () => {
+test('四个来源都能读，he/me/act/meta 归一化正确，工具行默认不收', () => {
   const { records, stores } = cross.loadAll()
-  assert.deepEqual(stores.map((s) => s.source), ['opencode', 'dsh', 'workbuddy'])
+  assert.deepEqual(stores.map((s) => s.source), ['opencode', 'dsh', 'workbuddy', 'zcode'])
   assert.equal(stores.find((s) => s.source === 'dsh').workspaces, 1)
   const dsh = records.filter((r) => r.source === 'dsh')
   assert.equal(dsh.find((r) => r.who === 'user').line, 1)
   assert.equal(dsh.find((r) => r.who === 'assistant').line, 2)
   assert.equal(dsh.find((r) => r.who === 'meta').kind, 'note')
+  const zc = records.filter((r) => r.source === 'zcode')
+  assert.equal(zc.find((r) => r.who === 'user').workspace, 'c:\\users\\huawei\\desktop\\work\\记忆')
+  assert.equal(zc.find((r) => r.who === 'meta').kind, 'note')
   assert.equal(records.filter((r) => r.kind === 'tool').length, 0)
-  assert.equal(records.length, 11)
+  assert.equal(records.length, 14)
   assert.ok(records.every((r) => r.text && r.line >= 1))
 })
 
@@ -170,7 +180,7 @@ test('库缺失和坏行不阻塞其他库', () => {
 test('缺失的库也会出现在 sources 里', () => {
   fs.rmSync(dshHome, { recursive: true, force: true })
   const list = cross.sources()
-  assert.equal(list.length, 3)
+  assert.equal(list.length, 4)
   assert.equal(list.find((s) => s.source === 'dsh').exists, false)
 })
 
@@ -185,15 +195,18 @@ test('共享仓库布局：一个根目录多条流', () => {
   writeJsonl(path.join(repo, 'workbuddy', 'stream.jsonl'), [
     { who: 'me', type: 'assistant/message', sid: 's-wb', ts: NOW - 2000, text: '共享仓库标记 在 WorkBuddy 里。' },
   ])
+  writeJsonl(path.join(repo, 'zcode', 'stream.jsonl'), [
+    { who: 'me', type: 'assistant/message', ws: 'c:\\work\\记忆', sid: 's-zc', ts: NOW - 500, text: '共享仓库标记 在 ZCode 里。' },
+  ])
   const prev = process.env.AGENT_MEMORY_HOME
   process.env.AGENT_MEMORY_HOME = repo
   try {
     const list = cross.sources()
-    assert.equal(list.length, 3)
+    assert.equal(list.length, 4)
     assert.ok(list.every((s) => s.exists))
     assert.ok(list.find((s) => s.source === 'opencode').path.startsWith(repo))
     const hits = cross.recall('共享仓库标记')
-    assert.equal(hits.length, 3)
+    assert.equal(hits.length, 4)
     assert.equal(hits[0].source, 'dsh')
   } finally {
     if (prev === undefined) delete process.env.AGENT_MEMORY_HOME

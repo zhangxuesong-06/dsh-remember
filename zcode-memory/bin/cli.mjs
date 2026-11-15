@@ -1,0 +1,84 @@
+// 人工核对入口：不用开会话也能看库、验账、回读。
+import { HOME } from '../lib/config.mjs'
+import { Ledger } from '../lib/store.mjs'
+import { recallBlock, traceBlock } from '../lib/assemble.mjs'
+import { readBlob } from '../lib/evidence.mjs'
+
+const [cmd, ...rest] = process.argv.slice(2)
+const ledger = () => new Ledger(HOME).open()
+
+function usage() {
+  console.log(`用法：node bin/cli.mjs <命令>
+  stats                库的体检数字
+  workspaces           有哪些工作区
+  verify               校验账本（OK / BAD，BAD 时退出码 1）
+  sync                 把当前内容接纳为基线
+  replay               从工具结果补写缺失的产物记录
+  show <段号>          回读某一段的原文
+  read <sha256>        回读证据 blob
+  recall <query>       按意思查
+  trace <query>        按字核对`)
+}
+
+try {
+  switch (cmd) {
+    case 'stats': {
+      const l = ledger()
+      console.log(JSON.stringify(l.health(), null, 2))
+      break
+    }
+    case 'workspaces': {
+      const ws = ledger().workspaces()
+      if (!ws.length) console.log('（还没有记录）')
+      for (const w of ws) console.log(`${w.name}\t${w.records} 条\t${w.ws}`)
+      break
+    }
+    case 'verify': {
+      const l = ledger()
+      const v = l.verify()
+      console.log(`ledger=${v.status} problems=${v.problems.length} blobs=${v.blobs} noHash=${v.noHash}`)
+      for (const p of v.problems.slice(0, 10)) console.log('  ·', p.file || '', p.reason || '')
+      process.exitCode = v.status === 'OK' ? 0 : 1
+      break
+    }
+    case 'sync': {
+      const v = ledger().sync()
+      console.log(`ledger=${v.status} problems=${v.problems.length}`)
+      process.exitCode = v.status === 'OK' ? 0 : 1
+      break
+    }
+    case 'replay': {
+      console.log('补写产物：' + ledger().replay())
+      break
+    }
+    case 'show': {
+      const id = Number(rest[0])
+      if (!Number.isInteger(id)) throw new Error('show 需要段号')
+      console.log(ledger().fullText(id))
+      break
+    }
+    case 'read': {
+      const hash = String(rest[0] || '')
+      process.stdout.write(readBlob(HOME, hash).toString('utf8'))
+      break
+    }
+    case 'recall': {
+      const query = rest.join(' ').trim()
+      if (!query) throw new Error('recall 需要一句话')
+      console.log(recallBlock(ledger(), { query }) || '没找到。')
+      break
+    }
+    case 'trace': {
+      const query = rest.join(' ').trim()
+      if (!query) throw new Error('trace 需要一句话')
+      console.log(traceBlock(ledger(), query) || '库里没有这句话。')
+      break
+    }
+    default:
+      usage()
+      process.exitCode = cmd ? 1 : 0
+  }
+} catch (e) {
+  console.error(e && e.message ? e.message : String(e))
+  process.exitCode = 1
+}

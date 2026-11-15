@@ -26,12 +26,14 @@ export function paths() {
       opencode: path.join(shared, 'opencode'),
       dsh: path.join(shared, 'dsh'),
       workbuddy: path.join(shared, 'workbuddy'),
+      zcode: path.join(shared, 'zcode'),
       manifest: path.join(shared, 'manifest.json'),
     },
     legacy: {
       opencode: process.env.OPENCODE_MEM_HOME || path.join(home, '.opencode-mem'),
       dsh: path.join(process.env.DSH_HOME || path.join(home, '.dsh'), 'dsh-memory'),
       workbuddy: process.env.WORKBUDDY_MEM_HOME || path.join(home, '.workbuddy', 'mem'),
+      zcode: process.env.ZCODE_MEM_HOME || path.join(home, '.zcode', 'memory'),
     },
   }
 }
@@ -39,12 +41,17 @@ export function paths() {
 function sharedStarted(p) {
   return fs.existsSync(path.join(p.opencode, 'stream.jsonl'))
     || fs.existsSync(path.join(p.workbuddy, 'stream.jsonl'))
+    || fs.existsSync(path.join(p.zcode, 'stream.jsonl'))
     || fs.existsSync(p.dsh)
 }
 
 export function layout() {
   const p = paths()
-  const shared = !!process.env.AGENT_MEMORY_HOME || sharedStarted(p.shared)
+  // 优先级：显式 AGENT_MEMORY_HOME > 显式旧库 env > 自动检测共享目录 > 旧库默认。
+  const explicitShared = !!process.env.AGENT_MEMORY_HOME
+  const explicitLegacy = !!(process.env.OPENCODE_MEM_HOME || process.env.WORKBUDDY_MEM_HOME
+    || process.env.ZCODE_MEM_HOME || process.env.DSH_HOME || process.env.DSH_MEMORY_HOME)
+  const shared = explicitShared || (!explicitLegacy && sharedStarted(p.shared))
   const base = shared ? p.shared : p.legacy
   return {
     shared,
@@ -52,6 +59,7 @@ export function layout() {
     opencode: base.opencode,
     dsh: base.dsh,
     workbuddy: base.workbuddy,
+    zcode: base.zcode,
     manifest: p.shared.manifest,
   }
 }
@@ -61,6 +69,7 @@ export function streams() {
   const list = [
     { source: 'opencode', path: path.join(l.opencode, 'stream.jsonl'), workspace: null },
     { source: 'workbuddy', path: path.join(l.workbuddy, 'stream.jsonl'), workspace: null },
+    { source: 'zcode', path: path.join(l.zcode, 'stream.jsonl'), workspace: null },
   ]
   let dirs = []
   try { dirs = fs.readdirSync(l.dsh, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) } catch {}

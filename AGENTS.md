@@ -86,6 +86,7 @@ node tools/mem-maintenance.mjs --root ~/.opencode-mem --prune # 默认只试算
 agent-memory/                    通用安装/识别层（选 adapter，含给模型看的 INSTALL.md）
 plugin/self-memory/              我自己用的 OpenCode 记忆插件（钩子 + 工具）
 workbuddy-memory/                WorkBuddy 记忆 skill（hook + 单文件脚本）
+zcode-memory/                    ZCode 记忆插件（6 个钩子 + 常驻 MCP，写共享库）
 tools/mem-core.mjs               OpenCode 的存储与检索（CLI 和插件共用）
 tools/mem.mjs                    OpenCode CLI
 dsh-memory/                      DSH 插件（fork 自 dsh-hippocampus, MIT）

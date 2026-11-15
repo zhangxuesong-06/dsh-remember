@@ -14,16 +14,17 @@ node agent-memory/install.mjs --dry-run --json
 
 1. `choice.ok === true` → 直接用选中的 harness，执行下面的安装命令。
 2. `choice.ambiguous === true` → 有多个 harness 都装过记忆。**这时才问用户**要用哪一个；不要替用户猜。
-3. `candidates` 为空 → 没发现 DSH / OpenCode / WorkBuddy。问用户实际用的是哪个，或确认路径。
+3. `candidates` 为空 → 没发现 DSH / OpenCode / WorkBuddy / ZCode。问用户实际用的是哪个，或确认路径。
 4. 只有一个候选但 `installed === false` → 说明软件在，但记忆没装过；可以装，但先确认用户要装的是这个。
 
-## 1. 三个 adapter
+## 1. 四个 adapter
 
 | harness | 识别标记 | 安装命令 | 生效方式 |
 |---|---|---|---|
 | `dsh` | `~/.dsh/profiles/desktop/package.json`、`~/.dsh/dsh-memory/config.json` | `node agent-memory/install.mjs --harness dsh --workspace "<工作区>"` | 重启 DSH |
 | `opencode` | `~/.config/opencode/opencode.json`、`~/.opencode-mem/` | `node agent-memory/install.mjs --harness opencode` | 配置热加载；必要时 `/reload` |
 | `workbuddy` | `~/.workbuddy/settings.json`、`~/.workbuddy/skills/self-memory/` | `node agent-memory/install.mjs --harness workbuddy` | 重开 WorkBuddy |
+| `zcode` | `~/.zcode/cli/config.json`、`~/.agent-memory/zcode/` | `node agent-memory/install.mjs --harness zcode` | 生成 hx-local 市场并在插件市场里安装 `zcode-memory`，重启 ZCode |
 
 `--dry-run` 只打印计划，不写文件。正式安装前先跑一次，确认 `adapter` 路径和动作对。
 
@@ -36,6 +37,7 @@ node agent-memory/install.mjs --dry-run --json
 | `dsh` | `session.event` / `systemPrompt.section` / `tools.register` |
 | `opencode` | `session.hook` / `tool.transform` / `context.copy` |
 | `workbuddy` | `hook.stdin` / `hook.process` / `pending.file` |
+| `zcode` | `hook.stdin` / `hook.process` / `mcp.stdio` / `pending.file` |
 
 ## 2. 安装时选择，运行时校验
 
@@ -123,6 +125,7 @@ node ~/.workbuddy/skills/self-memory/bin/mem.mjs trace "<刚说的那句话>"
 ├─ choice.ok 且 harness=dsh        → 装 dsh，重启
 ├─ choice.ok 且 harness=opencode   → 装 opencode，热加载
 ├─ choice.ok 且 harness=workbuddy  → 装 workbuddy，重开
+├─ choice.ok 且 harness=zcode      → 生成 hx-local 市场，装 zcode-memory，重启 ZCode
 ├─ ambiguous                       → 问用户选哪个
 └─ 没有候选                         → 问用户实际用什么
 ```

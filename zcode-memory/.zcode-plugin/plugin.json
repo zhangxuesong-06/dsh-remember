@@ -1,0 +1,11 @@
+{
+  "name": "zcode-memory",
+  "version": "0.1.0",
+  "description": "跨会话长期记忆：自动记录原话与工具证据，按线索回想，可溯源；与 OpenCode / DSH / WorkBuddy 共用同一个 ~/.agent-memory 库。",
+  "description_i18n": {
+    "zh-CN": "跨会话长期记忆：自动记录原话与工具证据，按线索回想，可溯源；与其它 harness 共用同一个记忆库。"
+  },
+  "author": { "name": "local" },
+  "license": "MIT",
+  "skills": "./skills"
+}

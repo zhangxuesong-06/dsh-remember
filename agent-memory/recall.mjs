@@ -1,10 +1,10 @@
-// 跨 harness 只读查询：OpenCode / DSH / WorkBuddy。
+// 跨 harness 只读查询：OpenCode / DSH / WorkBuddy / ZCode。
 //
 // 边界：
 //   - 只读：只 readFileSync / statSync / readdirSync，不建目录、不拿锁、不写缓存；
-//   - 不合并：三个库各自仍是唯一真相，结果只标来源；
+//   - 不合并：每个库各自仍是唯一真相，结果只标来源；
 //   - 不改写：原文件一个字节都不动，测试用哈希前后比对；
-//   - 不自动注入：按需调用，避免每轮对话都背三个库的开销。
+//   - 不自动注入：按需调用，避免每轮对话都背几个库的开销。
 //
 // 打分和 OpenCode 的 recall 保持一致（同一套 BM25、覆盖率、新鲜加分），
 // 这样跨库结果之间才可比。分词来自 mem-tokenize.mjs，不 import mem-core。
@@ -105,8 +105,8 @@ export function loadAll({ withTools = false } = {}) {
       if (rec.ts > s.lastTs) s.lastTs = rec.ts
     })
   }
-  // 让 sources 的顺序稳定：opencode / dsh / workbuddy。
-  const order = { opencode: 0, dsh: 1, workbuddy: 2 }
+  // 让 sources 的顺序稳定：opencode / dsh / workbuddy / zcode。
+  const order = { opencode: 0, dsh: 1, workbuddy: 2, zcode: 3 }
   const stores = [...bySource.values()].sort((a, b) => order[a.source] - order[b.source])
   return { records, stores }
 }
@@ -289,7 +289,7 @@ function main() {
     if (o.json) { console.log(JSON.stringify({ query, stores: hits.stores || [], hits }, null, 2)); return }
     if (!hits.length) { console.log('没找到。可以试 trace "<原话片段>"，或加 --with-tools。'); return }
     const count = (src) => hits.filter((h) => h.source === src).length
-    console.log(`跨库召回 ${hits.length} 条（OpenCode ${count('opencode')} · DSH ${count('dsh')} · WorkBuddy ${count('workbuddy')}）\n`)
+    console.log(`跨库召回 ${hits.length} 条（OpenCode ${count('opencode')} · DSH ${count('dsh')} · WorkBuddy ${count('workbuddy')} · ZCode ${count('zcode')}）\n`)
     for (const h of hits) {
       console.log(`[${h.source}] ${dayOf(h.ts)} ${h.workspace || '-'} ${refOf(h)}  ${excerpt(h.text)}`)
     }
@@ -302,7 +302,7 @@ function main() {
     if (!needle) { console.error('用法：agent-memory/recall.mjs trace "原话片段"'); process.exit(1) }
     const hits = trace(needle, o)
     if (o.json) { console.log(JSON.stringify({ needle, hits }, null, 2)); return }
-    if (!hits.length) { console.log('三个库里都没有这段原话。'); return }
+    if (!hits.length) { console.log('所有来源里都没有这段原话。'); return }
     console.log(`按字命中 ${hits.length} 条\n`)
     for (const h of hits) console.log(`[${h.source}] ${dayOf(h.ts)} ${h.workspace || '-'} ${refOf(h)}  ${excerpt(h.text)}`)
     return

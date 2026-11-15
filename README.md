@@ -2,15 +2,18 @@
 
 给 agent 用的长期记忆。三个 harness、一套共用的原则和证据格式。
 
+> 交接 / 排查记录见 [HANDOFF.md](HANDOFF.md)：共享仓库迁移、OpenCode 启动慢的根因与修复、测试基线、未提交改动。
+
 | 目录 | 是什么 | 装在哪 |
 |---|---|---|
 | `agent-memory/` | 通用安装/识别层：检测 harness，选对应 adapter | 仓库根目录运行 |
 | `dsh-memory/` | DSH 插件：按工作区隔离，挂 `session/event` 自动落盘 | `~/.dsh/profiles/node_modules/` |
 | `plugin/self-memory/` | OpenCode 插件：全局一个库，挂 `prompt` / `context` / 工具事件 | 全局 `opencode.json` 的 `plugins` |
 | `workbuddy-memory/` | WorkBuddy skill：hook 每次起进程，前后配对靠 `pending.json` | `~/.workbuddy/skills/self-memory/` |
+| `zcode-memory/` | ZCode 插件：6 个钩子瘦写入 + 常驻 MCP 检索；与其它 harness 共用共享库 | `~/.zcode/local-marketplace`（hx-local 市场） |
 | `tools/` | OpenCode 的存储与检索（CLI 和插件共用） | — |
 
-三个实现都能**不靠模型自觉**地记录：消息发生时就落盘，不是等模型想起来调工具。
+四个实现都能**不靠模型自觉**地记录：消息发生时就落盘，不是等模型想起来调工具。
 
 ---
 
@@ -21,6 +24,7 @@ node agent-memory/install.mjs --dry-run
 node agent-memory/install.mjs --harness dsh --workspace "D:\deepseek harness"
 node agent-memory/install.mjs --harness opencode
 node agent-memory/install.mjs --harness workbuddy
+node agent-memory/install.mjs --harness zcode
 ```
 
 `--dry-run` 只打印识别结果和计划，不写文件。默认 `auto` 只自动选“已经装过记忆”的那一个；多个就要求显式 `--harness`，不猜。
@@ -95,9 +99,9 @@ node --test agent-memory/recall.test.mjs
 node --test agent-memory/migrate.test.mjs
 ```
 
-跨 harness 查询是只读的：三个库各自仍是唯一真相，不合并、不改写、不自动注入。默认只查对话和派生记录，工具行加 `--with-tools`。结果里的 `opencode:2251`、`dsh:812`、`workbuddy:1002` 可以直接用 `show` 回读原文。
+跨 harness 查询是只读的：每个库各自仍是唯一真相，不合并、不改写、不自动注入。默认只查对话和派生记录，工具行加 `--with-tools`。结果里的 `opencode:2251`、`dsh:812`、`workbuddy:1002`、`zcode:41` 可以直接用 `show` 回读原文。
 
-迁移到共享仓库后，三个库放在同一个根目录下：
+迁移到共享仓库后，各库放在同一个根目录下：
 
 ```text
 ~/.agent-memory/
@@ -105,15 +109,40 @@ node --test agent-memory/migrate.test.mjs
   opencode/stream.jsonl
   dsh/<工作区>/stream.jsonl
   workbuddy/stream.jsonl
+  zcode/stream.jsonl
 ```
 
 `node agent-memory/migrate.mjs` 默认只做 dry-run；关闭三个 harness 后用 `--apply` 复制。旧目录保留不动；切换后如果还没有新记录，删除共享目录即可回退。一旦共享库开始写入，回退需要先把共享流复制回旧路径。三个写入端在 `~/.agent-memory/<harness>` 存在后自动切换，迁移前继续用旧路径。
+
+最省事的方式是双击 `agent-memory\activate.cmd`：它会先结束 OpenCode 和 `opencode-cli`，再执行 `--apply` 或 `--sync`，最后打印 `sources` 和 `health`。
 
 `stream.jsonl` 保存消息和可检索任务索引，`tools.jsonl` 保存操作事件，`episodes.jsonl` 保存任务关联，`blobs/` 保存按 SHA-256 寻址的完整工具证据和文件版本。原始工具证据不进入常规检索。`integrity.json` 是当前字节基线，能发现已纳入基线的记录被修改、删除、重排或截去尾部。
 
 旧数据不改写；首次纳入基线不代表过去从未丢失。`verify` 和 `health` 对异常返回非零退出码。合法但未提交的尾部经检查后用 `sync` 接纳；坏 JSON 或旧字节损坏会拒绝接纳。`replay` 按来源 ID 补齐派生记录，重复执行不会重复生成。`compact --apply` 已禁用。
 
 文件快照上限为 8 MiB，超限或不可读会明确标注。仅识别有明确路径的写入工具及 patch 增删改/移动；shell 改文件只有调用结果证据。旧版已截断的内容无法凭空恢复。背景护栏不能保证模型永远保持同一种文风。实现依据、边界和恢复步骤见 [可靠性说明](docs/memory-reliability.md)。
+
+---
+
+## zcode-memory（ZCode）
+
+ZCode 只能通过插件（skills + hooks + MCP）扩展，所以这一版是把 `dsh-memory` 的内核（只增不改的流、切段、BM25、锚/唤醒/到达/事实块、证据）搬到 ZCode 的宿主壳里，数据照样进 `~/.agent-memory/zcode/`。
+
+```bash
+node agent-memory/install.mjs --harness zcode   # 生成 ~/.zcode/local-marketplace 并注册
+```
+
+之后在 **Settings → Plugin Management → Discover → hx-local** 里安装 `zcode-memory`（同一个市场里还有 `superpowers`），完全退出并重启 ZCode。
+
+钩子挂 6 个事件：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Stop`。钩子进程只做追加（与库大小无关），检索放在常驻 MCP 里（每次调用前按字节偏移尾同步）。工具是 `recall` / `trace` / `remember` / `memory_stats` / `memory_read`。
+
+数据在 `~/.agent-memory/zcode/`：`stream.jsonl` 原文，`blobs/` 证据，`pending.json` 跨进程工具配对，`sessions/` 每场会话的锚与已展示段。
+
+```bash
+node zcode-memory/test.mjs
+node zcode-memory/bin/cli.mjs stats
+node zcode-memory/bin/cli.mjs verify
+```
 
 ---
 

@@ -1,0 +1,19 @@
+{
+  "name": "zcode-memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "zcode-memory · 给 ZCode 的长期记忆插件：自动落盘、按线索回想、可溯源，与 OpenCode / DSH / WorkBuddy 共用 ~/.agent-memory。",
+  "license": "MIT",
+  "author": "基于本项目 dsh-memory 内核改造",
+  "main": "bin/hook.mjs",
+  "files": [
+    "bin/*.mjs",
+    "lib/*.mjs",
+    "hooks/hooks.json",
+    ".mcp.json",
+    ".zcode-plugin/plugin.json",
+    "skills/zcode-memory/SKILL.md",
+    "README.md"
+  ]
+}

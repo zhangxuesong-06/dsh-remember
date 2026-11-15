@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "process", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hook.mjs"], "timeoutMs": 15000 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "process", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hook.mjs"], "timeoutMs": 15000 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|ApplyPatch|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "process", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hook.mjs"], "timeoutMs": 15000 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|ApplyPatch|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "process", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hook.mjs"], "timeoutMs": 15000 }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Write|Edit|ApplyPatch|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "process", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hook.mjs"], "timeoutMs": 15000 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "process", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/bin/hook.mjs"], "timeoutMs": 15000 }
+        ]
+      }
+    ]
+  }
+}

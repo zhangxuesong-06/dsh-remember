@@ -3,6 +3,9 @@
 .vscode/
 *.iml
 
+# ——— ZCode 自己生成的计划与临时状态 ———
+.zcode/plans/
+
 # ——— 上游参考仓库：它自己带 .git，不能当子模块提交 ———
 ref-hippocampus/
 

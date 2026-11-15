@@ -1,12 +1,12 @@
 # 跨 harness 只读查询
 
-目标：在 OpenCode 里也能找到 DSH、WorkBuddy 里做过的事，但不合并三个库。
+目标：在任意一个 harness 里也能找到其它 harness 里做过的事，但不合并各自的库。
 
 ## 边界
 
 - 只读：`readFileSync` / `statSync` / `readdirSync`，不建目录、不拿锁、不写缓存；
 - 不 import `mem-core` / `mem-journal`；分词来自独立的 `mem-tokenize.mjs`；
-- 三个库各自仍是唯一真相，结果只标 `opencode` / `dsh` / `workbuddy`；
+- 每个库各自仍是唯一真相，结果只标 `opencode` / `dsh` / `workbuddy` / `zcode`；
 - 不自动注入到每次对话，按需调用。
 
 ## 数据源
@@ -19,6 +19,7 @@
   opencode/stream.jsonl
   dsh/<工作区>/stream.jsonl
   workbuddy/stream.jsonl
+  zcode/stream.jsonl
 ```
 
 迁移前或显式设置环境变量时，回退到旧布局：
@@ -28,6 +29,7 @@
 | OpenCode | `~/.agent-memory/opencode/stream.jsonl` | `OPENCODE_MEM_HOME` 或 `~/.opencode-mem/stream.jsonl` |
 | DSH | `~/.agent-memory/dsh/<工作区>/stream.jsonl` | `DSH_HOME/dsh-memory/<工作区>/stream.jsonl` |
 | WorkBuddy | `~/.agent-memory/workbuddy/stream.jsonl` | `WORKBUDDY_MEM_HOME` 或 `~/.workbuddy/mem/stream.jsonl` |
+| ZCode | `~/.agent-memory/zcode/stream.jsonl` | `ZCODE_MEM_HOME` 或 `~/.zcode/memory/stream.jsonl` |
 
 DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收对话、笔记、决策、段落、产物；工具行用 `--with-tools` 显式打开。
 
@@ -36,7 +38,10 @@ DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收�
 ```bash
 node agent-memory/migrate.mjs            # dry-run，只出计划
 node agent-memory/migrate.mjs --apply    # 关闭三个 harness 后执行
+node agent-memory/migrate.mjs --sync     # 已迁移后接上旧库新增的尾部
 ```
+
+也可以直接双击 `agent-memory\activate.cmd`：它会结束 OpenCode 和 `opencode-cli`，再自动选择 `--apply` 或 `--sync`，最后验证并写 `~/.agent-memory/activation.log`。
 
 - 先写 staging，校验文件数和大小后原子改名；
 - 只复制，不移动；旧目录原样保留；

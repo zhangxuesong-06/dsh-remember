@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const HARNESSES = ['dsh', 'opencode', 'workbuddy']
+export const HARNESSES = ['dsh', 'opencode', 'workbuddy', 'zcode']
 
 function readJson(file) {
   try {
@@ -80,6 +80,26 @@ export function detectHarnesses({ home = os.homedir(), repoRoot = process.cwd() 
     })
   }
 
+  // ——— ZCode ———
+  const zcRoot = path.join(home, '.zcode')
+  const zcCliConfig = path.join(zcRoot, 'cli', 'config.json')
+  const zcJson = readJson(zcCliConfig)
+  const zcConfigText = zcJson ? JSON.stringify(zcJson) : ''
+  const zcLegacyStream = path.join(zcRoot, 'memory', 'stream.jsonl')
+  const zcSharedStream = path.join(home, '.agent-memory', 'zcode', 'stream.jsonl')
+  const zcConfigured = /zcode-memory|hx-local/.test(zcConfigText)
+  const zcInstalled = zcConfigured || exists(zcLegacyStream) || exists(zcSharedStream)
+  if (exists(zcRoot)) {
+    out.push({
+      id: 'zcode',
+      label: 'ZCode',
+      installed: !!zcInstalled,
+      markers: [zcCliConfig, zcLegacyStream, zcSharedStream].filter(exists),
+      adapter: path.join(repoRoot, 'zcode-memory'),
+      install: 'node agent-memory/tools/zcode-market.mjs（然后在插件市场里安装 zcode-memory，重启 ZCode）',
+    })
+  }
+
   return out
 }
 
@@ -96,5 +116,5 @@ export function chooseHarness(candidates, requested = 'auto') {
   if (installed.length > 1) return { ok: false, reason: '多个 harness 都装过记忆，请显式指定 --harness。', candidates: installed, ambiguous: true }
   if (candidates.length === 1) return { ok: true, harness: candidates[0] }
   if (candidates.length > 1) return { ok: false, reason: '发现了多个 harness，但都没有装过记忆，请显式指定 --harness。', candidates, ambiguous: true }
-  return { ok: false, reason: '没有发现 DSH / OpenCode / WorkBuddy。', candidates }
+  return { ok: false, reason: '没有发现 DSH / OpenCode / WorkBuddy / ZCode。', candidates }
 }

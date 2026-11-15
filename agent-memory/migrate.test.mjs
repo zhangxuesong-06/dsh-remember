@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { plan, migrate } from './migrate.mjs'
+import { plan, migrate, sync } from './migrate.mjs'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
 const tmp = fs.mkdtempSync(path.join(base, 'migrate-test-'))
@@ -111,4 +111,26 @@ test('缺失的库跳过，不阻塞其他流', () => {
   assert.equal(r.streams.workbuddy.records, 0)
   assert.equal(fs.existsSync(path.join(repo, 'workbuddy')), false)
   assert.equal(fs.existsSync(path.join(repo, 'opencode', 'stream.jsonl')), true)
+})
+
+test('sync 接上旧库新增的尾部', () => {
+  assert.equal(migrate({ apply: true }).ok, true)
+  fs.appendFileSync(path.join(legacyOc, 'stream.jsonl'), JSON.stringify({ who: 'user', kind: 'message', text: '迁移后新消息', ts: 9 }) + '\n')
+  fs.appendFileSync(path.join(legacyOc, 'tools.jsonl'), '{"phase":"call","n":2}\n')
+  fs.appendFileSync(path.join(legacyDsh, 'ws-a', 'stream.jsonl'), JSON.stringify({ who: 'me', type: 'assistant/message', text: 'DSH 新消息', ts: 10 }) + '\n')
+  const r = sync()
+  assert.equal(r.ok, true, r.reason)
+  assert.deepEqual(fs.readFileSync(path.join(repo, 'opencode', 'stream.jsonl')), fs.readFileSync(path.join(legacyOc, 'stream.jsonl')))
+  assert.deepEqual(fs.readFileSync(path.join(repo, 'dsh', 'ws-a', 'stream.jsonl')), fs.readFileSync(path.join(legacyDsh, 'ws-a', 'stream.jsonl')))
+  assert.equal(r.streams.opencode.records, 3)
+  assert.equal(r.streams.dsh.records, 2)
+})
+
+test('sync 检测分叉，不猜哪边对', () => {
+  assert.equal(migrate({ apply: true }).ok, true)
+  fs.appendFileSync(path.join(repo, 'opencode', 'stream.jsonl'), '{"who":"assistant","kind":"message","text":"共享新消息"}\n')
+  fs.appendFileSync(path.join(legacyOc, 'stream.jsonl'), '{"who":"user","kind":"message","text":"旧库新消息"}\n')
+  const r = sync()
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /分叉/)
 })

@@ -1,0 +1,79 @@
+# ——— IDE ———
+.idea/
+.vscode/
+*.iml
+
+# ——— 上游参考仓库：它自己带 .git，不能当子模块提交 ———
+ref-hippocampus/
+
+# ——— 运行时数据：插件自己会写，绝不进仓库 ———
+memory/
+*.jsonl
+*.jsonl.*
+*.db
+*.sqlite
+diag.log
+*.log
+snapshot-*.json
+snapshot-*.md
+dsh-memory/*.txt
+
+# ——— 早期语料分析的产物 ———
+# 这些文件里含真实对话摘录和本机绝对路径，只留在本地当证据。
+report.md
+report.json
+candidates.md
+candidates.json
+eval-result.json
+eval.mjs
+ablation.json
+ablation.mjs
+ablation-chunk.json
+ablation-chunk.md
+ablate-chunk.mjs
+probe-report.json
+probe.mjs
+gen-candidates.mjs
+spike.mjs
+questions.json
+gs.txt
+ls.txt
+
+# ——— 依赖 ———
+node_modules/
+
+# ——— 系统 ———
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
