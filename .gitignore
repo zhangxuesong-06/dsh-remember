@@ -41,6 +41,7 @@ spike.mjs
 questions.json
 gs.txt
 ls.txt
+docs/superpowers/
 
 # ——— 依赖 ———
 node_modules/

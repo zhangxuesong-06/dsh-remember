@@ -163,7 +163,7 @@ export function createJournal(root) {
     })
   }
   function updateJson(name, update) {
-    if (!['pins.json', 'aliases.json'].includes(name)) throw new Error('Unknown mutable state')
+    if (!['pins.json', 'aliases.json', 'methods.json'].includes(name)) throw new Error('Unknown mutable state')
     return locked(() => {
       const file = path.join(root, name)
       const old = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) : {}

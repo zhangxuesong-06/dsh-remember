@@ -41,6 +41,19 @@ node agent-memory/install.mjs --harness zcode
 2. **摘要只当索引。** 每轮只给「这事你以前碰过」的编号和日期；要细节就翻原话。
 3. **真相永远回原文。** `trace` 按字查，核对消息角色；承诺还要看引用上下文。系统生成的任务摘要不能当作当事人的发言。
 
+## 导出方法词表给 kgnav
+
+方法名与别名统一在记忆侧的独立 `methods.json` 维护，四个 harness 共用；
+普通同义词仍在 `aliases.json`，不会自动升级成方法，PMI 共现也不参与导出。
+
+```bash
+node agent-memory/methods.mjs set 手眼标定 handeye calibrateHandEye
+node agent-memory/methods.mjs export --out <库外目录>/methods.json
+```
+
+导出兼容 kgnav 现有 `from_memory.py --methods`。这里只读方法表，不读私人原文、
+不生成图或标签。完整命令、边界和无私人数据的端到端验证见 [方法词表说明](agent-memory/METHODS.md)。
+
 ---
 
 ## dsh-memory（DSH）

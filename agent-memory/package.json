@@ -10,6 +10,7 @@
     "./recall": "./recall.mjs",
     "./repo": "./repo.mjs",
     "./migrate": "./migrate.mjs",
+    "./methods": "./methods.mjs",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -18,7 +19,9 @@
   "scripts": {
     "test": "node test.mjs",
     "test:recall": "node --test recall.test.mjs",
-    "test:migrate": "node --test migrate.test.mjs"
+    "test:migrate": "node --test migrate.test.mjs",
+    "test:methods": "node --test methods.test.mjs",
+    "test:kgnav": "node test-kgnav.mjs"
   },
   "license": "MIT"
 }

@@ -1,0 +1,9 @@
+[
+  {"id":"synthetic-1","who":"assistant","kind":"message","sid":"synthetic-a","text":"合成项目甲：比较 handeye 的不同参数。"},
+  {"id":"synthetic-2","who":"assistant","kind":"message","sid":"synthetic-b","text":"合成项目乙：本轮仅讨论手眼标定，尚未实施。"},
+  {"id":"synthetic-3","who":"assistant","kind":"message","sid":"synthetic-c","text":"合成项目丙：研究 IDEMPOTENT 写入接口。"},
+  {"id":"synthetic-4","who":"assistant","kind":"message","sid":"synthetic-d","text":"合成项目丁：幂等重试的测试说明。"},
+  {"id":"synthetic-5","who":"user","kind":"message","sid":"synthetic-e","text":"合成项目戊：virtual machine 属于普通同义词。"},
+  {"id":"synthetic-6","who":"assistant","kind":"message","sid":"synthetic-f","text":"合成项目己：PMI诱饵只和其它词共现，不是方法。"},
+  {"id":"synthetic-7","who":"assistant","kind":"message","sid":"synthetic-g","text":"合成项目庚：Dijkstra 仅以规范名出现。"}
+]
