@@ -100,7 +100,7 @@ function buildMemory() {
     fs.rmSync(dest, { recursive: true, force: true })
     fs.mkdirSync(dest, { recursive: true })
     // test.mjs 不进插件；它是开发期自测，运行时用不到。
-    for (const item of ['package.json', 'README.md', 'lib', 'bin', 'hooks', 'skills', '.zcode-plugin', '.mcp.json']) {
+    for (const item of ['package.json', 'README.md', 'lib', 'bin', 'tools', 'hooks', 'skills', '.zcode-plugin', '.mcp.json']) {
       const from = path.join(src, item)
       if (!fs.existsSync(from)) continue
       if (fs.statSync(from).isDirectory()) copyTree(from, path.join(dest, item))

@@ -3,6 +3,9 @@
 .vscode/
 *.iml
 
+# ——— 本地 harness 工作报告 ———
+/HANDOFF.md
+
 # ——— ZCode 自己生成的计划与临时状态 ———
 .zcode/plans/
 

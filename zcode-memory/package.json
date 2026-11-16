@@ -10,6 +10,7 @@
   "files": [
     "bin/*.mjs",
     "lib/*.mjs",
+    "tools/*.mjs",
     "hooks/hooks.json",
     ".mcp.json",
     ".zcode-plugin/plugin.json",

@@ -1,7 +1,7 @@
 // 固定载荷跑一遍钩子：验证落盘、去重、证据、产物、账本和 MCP。
 // 全程用临时 ZCODE_MEM_HOME，不碰真实库。
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, appendFileSync, utimesSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const HOOK = join(HERE, 'bin', 'hook.mjs')
 const CLI = join(HERE, 'bin', 'cli.mjs')
 const MCP = join(HERE, 'bin', 'mcp.mjs')
+const MAINT = join(HERE, 'tools', 'maintenance.mjs')
 
 const root = mkdtempSync(join(tmpdir(), 'zcode-mem-test-'))
 const ws = join(root, 'workspace', '记忆')
@@ -19,7 +20,7 @@ const store = join(root, 'store')
 mkdirSync(store, { recursive: true })
 // 临时目录默认在 AppData\Local\Temp 下，正式配置会把那里排除掉；测试里显式放开。
 writeFileSync(join(store, 'config.json'), JSON.stringify({ enabled: true, exclude: [], workspaces: [] }), 'utf8')
-const env = { ...process.env, ZCODE_MEM_HOME: store, ZCODE_PROJECT_DIR: ws }
+const env = { ...process.env, ZCODE_MEM_HOME: store, ZCODE_PROJECT_DIR: ws, ZCODE_DISABLE_MAINTENANCE: '1' }
 
 let pass = 0
 let fail = 0
@@ -41,6 +42,13 @@ function hook(payload, customEnv = env) {
 function cli(args, customEnv = env) {
   const res = spawnSync(process.execPath, [CLI, ...args], { env: customEnv, encoding: 'utf8', timeout: 30000 })
   return { code: res.status, stdout: (res.stdout || '').trim(), stderr: (res.stderr || '').trim() }
+}
+
+function maint(args, customEnv = env) {
+  const res = spawnSync(process.execPath, [MAINT, ...args], { env: customEnv, encoding: 'utf8', timeout: 60000 })
+  let json = null
+  try { json = JSON.parse(res.stdout) } catch {}
+  return { code: res.status, stdout: (res.stdout || '').trim(), stderr: (res.stderr || '').trim(), json }
 }
 
 function streamHome() { return join(root, 'store') }
@@ -172,13 +180,55 @@ console.log('9) MCP server')
   ok('trace 能核对原话', Boolean(byId.get(4) && byId.get(4).result && String(byId.get(4).result.content[0].text).includes(byId.get(4).result.content[0].text)))
 }
 
-console.log('10) 篡改能被检出（独立临时库）')
+console.log('10) 维护')
+{
+  const v = maint(['--verify'])
+  ok('verify 通过', v.code === 0 && v.json && v.json.status === 'OK', v.stdout.slice(0, 120))
+
+  const b = maint(['--backup'])
+  const snaps = () => readdirSync(join(streamHome(), 'snapshots')).sort()
+  ok('backup 生成快照', b.code === 0 && snaps().length === 1 && existsSync(join(streamHome(), 'snapshots', snaps()[0], 'manifest.json')))
+  const b2 = maint(['--backup', '--keep', '1'])
+  ok('保留策略只留 1 份', b2.code === 0 && snaps().length === 1)
+
+  const orphan = join(streamHome(), 'blobs', 'a'.repeat(64))
+  writeFileSync(orphan, 'orphan evidence')
+  const old = new Date(Date.now() - 40 * 864e5)
+  utimesSync(orphan, old, old)
+  const dry = maint(['--prune'])
+  ok('prune 默认只试算', dry.code === 0 && dry.json && dry.json.candidates.some((c) => c.name === 'a'.repeat(64)) && existsSync(orphan))
+  const applied = maint(['--prune', '--apply'])
+  ok('prune --apply 才删除', applied.code === 0 && !existsSync(orphan) && applied.json.deleted >= 1)
+
+  appendFileSync(join(streamHome(), 'stream.jsonl'),
+    JSON.stringify({ ts: Date.now(), who: 'he', sid: 's_tail', text: '待接纳的尾巴', type: 'user/message', hash: sha256('待接纳的尾巴') }) + '\n', 'utf8')
+  const pending = maint(['--verify'])
+  ok('未接纳尾巴显示 PENDING', pending.code === 0 && pending.json && pending.json.status === 'PENDING', pending.json && pending.json.status)
+  const synced = maint(['--sync'])
+  ok('sync 接纳尾巴', synced.code === 0 && synced.json && synced.json.ok === true && synced.json.status === 'OK')
+  ok('接纳后 verify OK', maint(['--verify']).json.status === 'OK')
+
+  const due1 = maint(['--due'])
+  ok('due 写入 maintenance.json', due1.code === 0 && due1.json && typeof due1.json.lastRun === 'number' && existsSync(join(streamHome(), 'maintenance.json')))
+  const due2 = maint(['--due'])
+  ok('12 小时内不重复跑', due2.json && due2.json.skipped === true)
+  const forced = maint(['--due', '--force'])
+  ok('--force 立即重跑', forced.code === 0 && forced.json && forced.json.lastRun >= due1.json.lastRun)
+
+  const rep = maint(['--report'])
+  ok('report 给出体积与分类', rep.code === 0 && rep.json && rep.json.stream.records > 0 && rep.json.blobs.files >= 0 && rep.json.snapshots.files > 0)
+
+  const h = cli(['health'])
+  ok('cli health 一行输出', h.code === 0 && /ledger=OK/.test(h.stdout) && /records=\d+/.test(h.stdout), h.stdout)
+}
+
+console.log('11) 篡改能被检出（独立临时库）')
 {
   const root2 = mkdtempSync(join(tmpdir(), 'zcode-mem-tamper-'))
   const store2 = join(root2, 'store')
   mkdirSync(store2, { recursive: true })
   writeFileSync(join(store2, 'config.json'), JSON.stringify({ enabled: true, exclude: [], workspaces: [] }), 'utf8')
-  const env2 = { ...process.env, ZCODE_MEM_HOME: store2, ZCODE_PROJECT_DIR: ws }
+  const env2 = { ...process.env, ZCODE_MEM_HOME: store2, ZCODE_PROJECT_DIR: ws, ZCODE_DISABLE_MAINTENANCE: '1' }
   const run = (payload) => spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ cwd: ws, session_id: 'sess_t', turnId: 't1', timestamp: Date.now(), ...payload }),
     env: env2, encoding: 'utf8', timeout: 30000,

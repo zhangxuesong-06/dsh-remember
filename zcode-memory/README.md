@@ -14,7 +14,8 @@
 | `bin/hook.mjs` | 每次事件起一个进程，只做解析 + 追加 + 注入；任何异常都 exit 0，绝不阻塞会话 |
 | `bin/mcp.mjs` | 常驻 stdio MCP，暴露 `recall` / `trace` / `remember` / `memory_stats` / `memory_read` |
 | `lib/*.mjs` | 内核：只增不改的流、切段、BM25 检索、身份锚/唤醒/到达/事实块、证据 blob |
-| `bin/cli.mjs` | 人工核对：stats / verify / show / recall / trace / replay / sync |
+| `tools/maintenance.mjs` | 校验、接纳基线、快照、保留 14 份、无引用 blob 清理、体积报告 |
+| `bin/cli.mjs` | 人工核对：stats / health / maint / verify / show / recall / trace / replay / sync |
 
 ## 写入什么
 
@@ -32,12 +33,28 @@
   避免每次输入多等几百毫秒。
 - `verify` 的 OK 只证明已接纳字节没被改过，不证明内容真实，也不证明基线之前没丢过。
 
+## 维护
+
+SessionStart 会 detached 触发 `tools/maintenance.mjs --due`，默认 12 小时一次；
+`ZCODE_DISABLE_MAINTENANCE=1` 关闭，`ZCODE_MEM_MAINTENANCE_INTERVAL_HOURS` 调间隔。
+
+```bash
+node zcode-memory/bin/cli.mjs health
+node zcode-memory/bin/cli.mjs maint report     # 体积与分类计数
+node zcode-memory/bin/cli.mjs maint verify
+node zcode-memory/bin/cli.mjs maint sync       # 接纳合法尾巴为基线
+node zcode-memory/bin/cli.mjs maint prune      # 只试算；加 --apply 才删
+node zcode-memory/bin/cli.mjs maint backup     # 快照 + 保留 14 份
+```
+
+维护只处理已接纳的完整行：半行、坏 JSON、引用扫描失败时拒绝 prune，不猜。
+
 ## 手动验证
 
 ```bash
 node zcode-memory/test.mjs
 node zcode-memory/bin/cli.mjs stats
-node zcode-memory/bin/cli.mjs verify
+node zcode-memory/bin/cli.mjs health
 node agent-memory/recall.mjs sources
 ```
 

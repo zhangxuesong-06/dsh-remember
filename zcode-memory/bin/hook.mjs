@@ -5,6 +5,8 @@
 //   2. 不返回任何权限决定（PreToolUse 里绝不 allow/deny）。
 //   3. 只在 stdout 输出严格 JSON；没有要注入的东西就什么都不输出。
 import { readFileSync, statSync, writeSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { HOME, STREAM, diag, inScope, loadCfg } from '../lib/config.mjs'
 import { append } from '../lib/journal.mjs'
 import { Ledger } from '../lib/store.mjs'
@@ -48,7 +50,22 @@ function appendAll(records) {
   }
 }
 
+// 维护子进程：校验、接纳基线、快照、保留。默认 12 小时一次，失败只写 diag。
+let maintenanceStarted = false
+function startMaintenance() {
+  if (maintenanceStarted || process.env.ZCODE_DISABLE_MAINTENANCE === '1') return
+  maintenanceStarted = true
+  try {
+    const script = fileURLToPath(new URL('../tools/maintenance.mjs', import.meta.url))
+    const child = spawn(process.execPath, [script, '--due'], { detached: true, stdio: 'ignore', windowsHide: true, env: process.env })
+    child.on('error', (e) => diag('维护进程失败：' + e.message))
+    child.on('exit', (code) => { if (code) diag('维护进程退出：' + code) })
+    child.unref()
+  } catch (e) { diag('维护启动失败：' + (e && e.message)) }
+}
+
 function onSessionStart(f, cfg, state) {
+  startMaintenance()
   const source = f.source || 'startup'
   if (source === 'compact') {
     state.compacted = true

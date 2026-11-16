@@ -1,4 +1,6 @@
 // 人工核对入口：不用开会话也能看库、验账、回读。
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { HOME } from '../lib/config.mjs'
 import { Ledger } from '../lib/store.mjs'
 import { recallBlock, traceBlock } from '../lib/assemble.mjs'
@@ -6,10 +8,19 @@ import { readBlob } from '../lib/evidence.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
 const ledger = () => new Ledger(HOME).open()
+const maintenance = (args) => {
+  const script = fileURLToPath(new URL('../tools/maintenance.mjs', import.meta.url))
+  const res = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env: process.env })
+  if (res.stdout) process.stdout.write(res.stdout)
+  if (res.stderr) process.stderr.write(res.stderr)
+  return res.status ?? 1
+}
 
 function usage() {
   console.log(`用法：node bin/cli.mjs <命令>
   stats                库的体检数字
+  health               一行体检（records/段/blob/账本状态）
+  maint <参数>         转给 tools/maintenance.mjs（verify/sync/backup/prune/report/due）
   workspaces           有哪些工作区
   verify               校验账本（OK / BAD，BAD 时退出码 1）
   sync                 把当前内容接纳为基线
@@ -25,6 +36,17 @@ try {
     case 'stats': {
       const l = ledger()
       console.log(JSON.stringify(l.health(), null, 2))
+      break
+    }
+    case 'health': {
+      const l = ledger()
+      const h = l.health()
+      console.log(`ledger=${h.ledger} records=${h.docs} traces=${h.traces} acts=${h.acts} episodes=${h.episodes} blobs=${h.blobs} problems=${h.problems} bytes=${h.bytes}`)
+      process.exitCode = h.ledger === 'OK' ? 0 : 1
+      break
+    }
+    case 'maint': {
+      process.exitCode = maintenance(rest)
       break
     }
     case 'workspaces': {

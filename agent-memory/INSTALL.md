@@ -84,6 +84,18 @@ node ~/.workbuddy/skills/self-memory/bin/mem.mjs verify
 
 期望 `账本 OK` / `ledger=OK`。
 
+### ZCode
+
+```bash
+node zcode-memory/bin/cli.mjs health
+node zcode-memory/bin/cli.mjs maint verify
+node zcode-memory/bin/cli.mjs maint report
+```
+
+期望 `ledger=OK`。`maint` 的其余子命令：`sync`（接纳合法尾巴）、`backup`（快照，保留 14 份）、
+`prune`（默认只试算）、`due`（12 小时一次）。插件装好在 `plugins/cache/hx-local/zcode-memory/`，
+maint 命令也可以直接对已安装副本跑。
+
 ## 5. 装完怎么确认“真的在记”
 
 不要只看日志说“已加载”。新开一个会话，说一句普通的话，然后查：
@@ -97,6 +109,9 @@ node ~/.dsh/profiles/node_modules/dsh-memory/cli.mjs trace "<工作区>" "<刚�
 
 # WorkBuddy
 node ~/.workbuddy/skills/self-memory/bin/mem.mjs trace "<刚说的那句话>"
+
+# ZCode
+node zcode-memory/bin/cli.mjs trace "<刚说的那句话>"
 ```
 
 查到原话，才算真的落盘。查不到就检查：
@@ -104,7 +119,10 @@ node ~/.workbuddy/skills/self-memory/bin/mem.mjs trace "<刚说的那句话>"
 - 工作区路径是否在配置里；
 - 插件是否加载（`diag.log`）；
 - 是否装完还没重启；
-- WorkBuddy 的 `PostToolUse` 是否已挂上（重开后才生效）。
+- WorkBuddy 的 `PostToolUse` 是否已挂上（重开后才生效）；
+- ZCode 的 `plugins.enabledPlugins` 是否有 `zcode-memory@hx-local`，以及
+  `plugins/marketplaces/hx-local/plugins/` 是否存在（只有清单会报
+  “Unsupported or missing plugin source”）。
 
 ## 6. 常见失败
 
