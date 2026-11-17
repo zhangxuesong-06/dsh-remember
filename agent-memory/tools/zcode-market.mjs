@@ -34,7 +34,11 @@ const INSTALLED = path.join(PLUGIN_ROOT, 'installed_plugins.json')
 function log(msg) { console.log((dry ? '[dry-run] ' : '') + msg) }
 
 function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) } catch { return fallback }
+  if (!fs.existsSync(file)) return fallback
+  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) } catch (error) {
+    // 宁可不装，也不要把坏文件读成空对象再写回去——那会顺手丢掉别的插件键。
+    throw new Error(`配置文件读不出来，已中止（没有覆盖）：${file} — ${error.message}`)
+  }
 }
 
 function backup(file) {

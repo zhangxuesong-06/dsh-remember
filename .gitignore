@@ -24,6 +24,23 @@ snapshot-*.json
 snapshot-*.md
 dsh-memory/*.txt
 
+# ——— 原子写、备份、维护留下的临时件（库若放在仓库内时）———
+*.tmp
+*.tmp-*
+*.bak
+*.bak-*
+*.swp
+*~
+.maintenance-lock/
+.journal-lock/
+.index-building
+snapshots/
+blobs/
+pending.json
+integrity.json
+maintenance.json
+local-marketplace/
+
 # ——— 早期语料分析的产物 ———
 # 这些文件里含真实对话摘录和本机绝对路径，只留在本地当证据。
 report.md
