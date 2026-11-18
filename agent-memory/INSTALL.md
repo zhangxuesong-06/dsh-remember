@@ -96,6 +96,16 @@ node zcode-memory/bin/cli.mjs maint report
 `prune`（默认只试算）、`due`（12 小时一次）。插件装好在 `plugins/cache/hx-local/zcode-memory/`，
 maint 命令也可以直接对已安装副本跑。
 
+如果 `coverage` 显示 ZCode 有硬缺口（`silent` > 0）：
+
+```bash
+node zcode-memory/bin/cli.mjs backfill --dry-run
+node zcode-memory/bin/cli.mjs backfill
+node zcode-memory/bin/cli.mjs maint verify
+```
+
+回填只读 `~/.zcode/cli/db/db.sqlite`；`--db` 可换路径，`--session` 可只补一场。
+
 ## 5. 装完怎么确认“真的在记”
 
 不要只看日志说“已加载”。新开一个会话，说一句普通的话，然后查：

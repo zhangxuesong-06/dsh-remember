@@ -164,9 +164,14 @@ function main() {
     case 'PostToolUseFailure':
       if (cfg.capture !== false) appendAll(failToolRecords(f))
       break
-    case 'Stop':
-      if (cfg.capture !== false) appendAll(assistantRecords(f))
+    case 'Stop': {
+      if (cfg.capture !== false) {
+        const recs = assistantRecords(f)
+        if (!recs.length) diag(`stop 空正文：sid=${f.sid || '?'} turn=${f.turn || '?'}（可用 tools/backfill.mjs 回填）`)
+        appendAll(recs)
+      }
       break
+    }
     default:
       break // PermissionRequest 等：不拦、不记
   }

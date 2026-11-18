@@ -15,12 +15,21 @@ const maintenance = (args) => {
   if (res.stderr) process.stderr.write(res.stderr)
   return res.status ?? 1
 }
+const backfill = (args) => {
+  const script = fileURLToPath(new URL('../tools/backfill.mjs', import.meta.url))
+  const res = spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', env: process.env })
+  if (res.stdout) process.stdout.write(res.stdout)
+  if (res.stderr) process.stderr.write(res.stderr)
+  return res.status ?? 1
+}
 
 function usage() {
   console.log(`用法：node bin/cli.mjs <命令>
   stats                库的体检数字
   health               一行体检（records/段/blob/账本状态）
   maint <参数>         转给 tools/maintenance.mjs（verify/sync/backup/prune/report/due）
+  backfill [--db 路径] [--session sid] [--since 7d] [--dry-run]
+                       从 ZCode 数据库回填缺失的助手回答（只读库、幂等）
   workspaces           有哪些工作区
   verify               校验账本（OK / BAD，BAD 时退出码 1）
   sync                 把当前内容接纳为基线
@@ -46,7 +55,13 @@ try {
       break
     }
     case 'maint': {
-      process.exitCode = maintenance(rest)
+      // `maint report` 和 `maint --report` 都认；维护脚本只接受长参数。
+      const args = rest.map((a) => (a.startsWith('-') ? a : '--' + a))
+      process.exitCode = maintenance(args)
+      break
+    }
+    case 'backfill': {
+      process.exitCode = backfill(rest)
       break
     }
     case 'workspaces': {

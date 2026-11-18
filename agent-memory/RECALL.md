@@ -33,6 +33,34 @@
 
 DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收对话、笔记、决策、段落、产物；工具行用 `--with-tools` 显式打开。
 
+## 捕获完整性
+
+```bash
+node agent-memory/coverage.mjs                 # 四端一张表
+node agent-memory/coverage.mjs --source zcode
+node agent-memory/coverage.mjs --since 7d
+node agent-memory/coverage.mjs --worst         # 列出缺得最多的会话和引用行号
+```
+
+口径：
+
+- `turns`：用户消息数（一次提问算一轮）。
+- `missing`：这一轮和下一条用户消息之间没有助手记录（严格口径）。
+- `followup`：`missing` 里后面还有回答的——用户连发几条，回答合并到了下一轮，不算丢。
+- `silent`：整场会话后面再也没有任何助手记录，这才是硬缺口。
+- `eff`：`(answered + followup) / turns`，用来判断“是否系统性丢回答”。
+- `noResult`：工具调用没有对应结果；OpenCode 的工具在 `tools.jsonl`，这里恒为 0。
+
+ZCode 的硬缺口可以用回填补：
+
+```bash
+node zcode-memory/bin/cli.mjs backfill --dry-run
+node zcode-memory/bin/cli.mjs backfill
+node zcode-memory/bin/cli.mjs maint verify
+```
+
+回填只读 ZCode 的 `db.sqlite`，按时间窗取该轮最后一条 assistant 正文，幂等；找不到正文的轮只计数。
+
 ## 迁移
 
 ```bash

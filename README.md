@@ -110,9 +110,18 @@ node agent-memory/migrate.mjs
 node --test tools/tests/memory.test.mjs
 node --test agent-memory/recall.test.mjs
 node --test agent-memory/migrate.test.mjs
+node --test agent-memory/coverage.test.mjs
 ```
 
 跨 harness 查询是只读的：每个库各自仍是唯一真相，不合并、不改写、不自动注入。默认只查对话和派生记录，工具行加 `--with-tools`。结果里的 `opencode:2251`、`dsh:812`、`workbuddy:1002`、`zcode:41` 可以直接用 `show` 回读原文。
+
+捕获是否完整，用共享体检看：
+
+```bash
+node agent-memory/coverage.mjs --worst
+```
+
+`silent` 才是硬缺口（整场后面都没有回答）；`followup` 是用户连发、回答合并到下一轮，不算丢。
 
 迁移到共享仓库后，各库放在同一个根目录下：
 

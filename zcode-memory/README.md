@@ -33,6 +33,21 @@
   避免每次输入多等几百毫秒。
 - `verify` 的 OK 只证明已接纳字节没被改过，不证明内容真实，也不证明基线之前没丢过。
 
+## 回填缺口
+
+Stop 钩子在部分轮拿不到最后的回答（用户紧接着发下一条、轮被中断、长工具链结束时都可能）。
+ZCode 自己的数据库里有完整正文，可以只读回填：
+
+```bash
+node zcode-memory/bin/cli.mjs backfill --dry-run
+node zcode-memory/bin/cli.mjs backfill
+node zcode-memory/bin/cli.mjs backfill --session sess_xxx --since 7d
+```
+
+回填按「用户消息 → 下一条用户消息」的时间窗取该轮最后一条 assistant 正文，`eventKey` 与正文
+哈希双重去重，重复执行不增行；来源标 `db.backfill`，`verify` 仍按原账本校验。找不到正文的轮
+只计数，不猜。
+
 ## 维护
 
 SessionStart 会 detached 触发 `tools/maintenance.mjs --due`，默认 12 小时一次；

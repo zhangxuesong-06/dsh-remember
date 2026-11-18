@@ -24,6 +24,21 @@ snapshot-*.json
 snapshot-*.md
 dsh-memory/*.txt
 
+# ——— 各 harness 的记忆库 ———
+# 默认都在用户主目录；这里防的是把 *_MEM_HOME 指到仓库内的情况。
+# 这些目录里是原话、工具证据、文件版本和配置，属于个人信息，绝不提交。
+/.agent-memory/
+/.opencode-mem/
+/.dsh/
+/.workbuddy/
+/.zcode/
+state.json
+seqs.json
+assoc.json
+pins.json
+aliases.json
+methods.json
+
 # ——— 原子写、备份、维护留下的临时件（库若放在仓库内时）———
 *.tmp
 *.tmp-*

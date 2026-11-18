@@ -222,7 +222,67 @@ console.log('10) 维护')
   ok('cli health 一行输出', h.code === 0 && /ledger=OK/.test(h.stdout) && /records=\d+/.test(h.stdout), h.stdout)
 }
 
-console.log('11) 篡改能被检出（独立临时库）')
+console.log('11) 从 ZCode 数据库回填')
+{
+  const { DatabaseSync } = await import('node:sqlite')
+  const dbFile = join(store, '..', 'zcode-db.sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec('create table message(id text primary key, session_id text, time_created integer, data text)')
+  db.exec('create table part(id text primary key, message_id text, session_id text, time_created integer, data text)')
+  const t0 = Date.now() - 60 * 60 * 1000
+  const prompt = (turn, text, ts) => hook({ hook_event_name: 'UserPromptSubmit', prompt: text, turnId: turn, session_id: 'sess_bf', timestamp: ts })
+  prompt('bf1', '回填窗口一', t0)
+  prompt('bf2', '回填窗口二', t0 + 10_000)
+  prompt('bf3', '回填窗口三（流里已有回答）', t0 + 20_000)
+  prompt('bf4', '回填窗口四（库里没有正文）', t0 + 30_000)
+  prompt('bf6', '回填窗口六（与窗口一正文重复）', t0 + 50_000)
+  // bf3 已经在流里有一条助手记录：回填应判「已有」，不再查库、不重复写。
+  hook({ hook_event_name: 'Stop', last_assistant_message: '回答三', turnId: 'bf3', session_id: 'sess_bf', timestamp: t0 + 21_000 })
+
+  const add = (id, ts, text) => {
+    db.prepare('insert into message(id,session_id,time_created,data) values(?,?,?,?)')
+      .run('m-' + id, 'sess_bf', ts, JSON.stringify({ role: 'assistant' }))
+    db.prepare('insert into part(id,message_id,session_id,time_created,data) values(?,?,?,?,?)')
+      .run('p-' + id, 'm-' + id, 'sess_bf', ts, JSON.stringify({ type: 'text', text }))
+  }
+  add('1', t0 + 1000, '回答一')
+  add('2', t0 + 11_000, '回答二')
+  add('3', t0 + 22_000, '回答三')
+  add('6', t0 + 51_000, '回答一')
+  db.close()
+
+  const bfEnv = { ...env, ZCODE_DB: dbFile }
+  const first = cli(['backfill', '--session', 'sess_bf'], bfEnv)
+  const firstJson = JSON.parse(first.stdout)
+  ok('回填两条缺失回答', first.code === 0 && firstJson.filled === 2, first.stdout.slice(0, 160))
+  ok('库里没有正文的窗口只计数', firstJson.noText === 1)
+  ok('与已有正文重复的不写', firstJson.duplicate === 1)
+  ok('已有回答的轮不再查库', firstJson.already === 1)
+  const rowsAfter = rows().filter((r) => r.type === 'assistant/message' && r.sid === 'sess_bf')
+  ok('回填记录带来源与 turn', rowsAfter.some((r) => r.source && r.source.type === 'db.backfill' && r.turn === 'bf1'))
+
+  const second = cli(['backfill', '--session', 'sess_bf'], bfEnv)
+  const secondJson = JSON.parse(second.stdout)
+  ok('重复执行不增行', secondJson.filled === 0 && secondJson.already === 3, second.stdout.slice(0, 160))
+  ok('回填后账本仍 OK', maint(['--sync']).code === 0 && maint(['--verify']).json.status === 'OK')
+
+  const dry = (() => {
+    // 新开一个窗口，只让它出现在库里：dry-run 应报 filled=1 但不落盘。
+    prompt('bf5', '回填窗口五（只试算）', t0 + 40_000)
+    const d2 = new DatabaseSync(dbFile)
+    d2.prepare('insert into message(id,session_id,time_created,data) values(?,?,?,?)')
+      .run('m-5', 'sess_bf', t0 + 41_000, JSON.stringify({ role: 'assistant' }))
+    d2.prepare('insert into part(id,message_id,session_id,time_created,data) values(?,?,?,?,?)')
+      .run('p-5', 'm-5', 'sess_bf', t0 + 41_000, JSON.stringify({ type: 'text', text: '回答五' }))
+    d2.close()
+    const before = rows().length
+    const res = cli(['backfill', '--session', 'sess_bf', '--dry-run'], bfEnv)
+    return { ...JSON.parse(res.stdout), before, after: rows().length }
+  })()
+  ok('--dry-run 报将补但实际不写', dry.filled === 1 && dry.after === dry.before, JSON.stringify({ filled: dry.filled, before: dry.before, after: dry.after }))
+}
+
+console.log('12) 篡改能被检出（独立临时库）')
 {
   const root2 = mkdtempSync(join(tmpdir(), 'zcode-mem-tamper-'))
   const store2 = join(root2, 'store')
