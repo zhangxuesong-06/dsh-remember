@@ -4,10 +4,18 @@
 // integrity.json 是“当前接纳到哪里”的基线：它能发现已接纳字节被改、删、重排或截尾，
 // 但不能证明基线之前没有丢过东西，也不证明记录内容真实。
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex')
+
+// 库根：一处定义，hook / CLI / 维护进程都走这里，避免"写一份、备份另一份"。
+// 只有显式 WORKBUDDY_MEM_HOME 才改道；否则固定共享根，不猜、不回落旧目录。
+export function resolveRoot(env = process.env) {
+  if (env.WORKBUDDY_MEM_HOME) return path.resolve(env.WORKBUDDY_MEM_HOME)
+  return path.join(os.homedir(), '.agent-memory', 'workbuddy')
+}
 
 export function atomicWrite(file, value) {
   const tmp = file + '.tmp-' + randomUUID()

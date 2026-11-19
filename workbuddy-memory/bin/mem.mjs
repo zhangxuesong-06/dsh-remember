@@ -24,20 +24,15 @@
 
 import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, renameSync, unlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs } from './mem-evidence.mjs'
+import { createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs, resolveRoot } from './mem-evidence.mjs'
 import { buildIndex, appendIndex, searchIndex, indexStore, episodesByIds, indexBuiltAt, indexFresh } from './mem-index.mjs'
 
-function defaultRoot() {
-  const shared = join(homedir(), '.agent-memory', 'workbuddy')
-  const legacy = join(homedir(), '.workbuddy', 'mem')
-  // 迁移完成后自动走共享仓库；迁移前继续用旧目录。
-  return existsSync(shared) ? shared : legacy
-}
-const ROOT = process.env.WORKBUDDY_MEM_HOME || defaultRoot()
+// 库根走 mem-evidence.resolveRoot：hook、CLI、维护进程共用同一个判断。
+const ROOT = resolveRoot()
 const STREAM = join(ROOT, 'stream.jsonl')
 const MARKS = join(ROOT, 'marks.jsonl')
 const PENDING = join(ROOT, 'pending.json')
@@ -75,7 +70,7 @@ function maybeIndex() {
 function maybeMaintenance() {
   if (process.env.WORKBUDDY_DISABLE_MAINTENANCE === '1') return
   try {
-    const child = spawn(process.execPath, [MEMAINT, '--due'], {
+    const child = spawn(process.execPath, [MEMAINT, '--due', '--root', ROOT], {
       detached: true, stdio: 'ignore', windowsHide: true, env: process.env,
     })
     child.on('error', (e) => diag('维护进程失败：' + e.message))
@@ -281,7 +276,7 @@ function append(cwd, rec) {
     hash: sha256(text),
     id: rec.id || sha256(ts + '|' + rec.who + '|' + text).slice(0, 16),
   }
-  for (const key of ['eventKey', 'messageID', 'turnID', 'source', 'evidence', 'versions', 'files', 'status', 'artifact', 'completion', 'callId', 'path']) {
+  for (const key of ['eventKey', 'messageID', 'turnID', 'source', 'evidence', 'versions', 'files', 'status', 'artifact', 'completion', 'callId', 'path', 'agent', 'expert', 'linked', 'durationMs']) {
     if (rec[key] !== undefined && rec[key] !== null) out[key] = rec[key]
   }
   try {
@@ -779,13 +774,85 @@ function toolNameOf(p) { return String(p.tool_name || p.tool || 'tool') }
 function callIdOf(p) { return p.tool_use_id || p.tool_call_id || p.call_id || null }
 function argsOf(p) { return p.tool_input || p.tool_args || {} }
 
+// ——— 工具归类 ———
+// 轻工具（读、查、列目录、待办）的结果只留摘要和小样本，不把整份文件写进证据；
+// 出错时照样存完整证据，否则没法查原因。
+const LIGHT_TOOLS = new Set([
+  'read', 'readfile', 'read_file', 'grep', 'ripgrep', 'glob', 'ls', 'list', 'dir',
+  'notebookread', 'websearch', 'todowrite', 'todo_write', 'todord', 'todos',
+  'skill', 'memory', 'update_plan', 'search_data', 'get_cell_ranges',
+])
+const LIGHT_BLOB_MAX = 256 * 1024
+const AGENT_TOOL = /^(task|agent|subagent|dispatch_agent|dispatchagent|task_agent|spawn_agent)$/
+const EXPERT_TOOL = /(expert|plugin|专家)/i
+
+const normTool = (name) => String(name || '').split(/[.:]/).pop().toLowerCase()
+const isLightTool = (name) => LIGHT_TOOLS.has(normTool(name))
+const isAgentTool = (name) => AGENT_TOOL.test(normTool(name))
+const safeText = (v, max = 0) => {
+  let s = ''
+  try { s = typeof v === 'string' ? v : JSON.stringify(v) } catch { s = String(v ?? '') }
+  return max > 0 ? s.slice(0, max) : s
+}
+
+// 子智能体 / 专家信息：hook 负载和工具入参两处都可能有，谁都别漏。
+// 注意 harness 的负载里常带 agent_type=cli（会话本身的运行方式），那不是子智能体，
+// 所以只在「确实是子智能体工具」时才认 agent_type，且挡掉这些通用值。
+const AGENT_TYPE_NOISE = /^(cli|main|primary|default|workbuddy|agent|app|desktop|web)$/i
+
+function metaFrom(p, args, toolName = '') {
+  const src = { ...(p && typeof p === 'object' ? p : {}), ...(args && typeof args === 'object' ? args : {}) }
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = src[k]
+      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim()
+    }
+    return null
+  }
+  const agentLike = isAgentTool(toolName)
+  const typeKeys = agentLike
+    ? ['subagent_type', 'subagentType', 'agent_type', 'agentType', 'agent_name', 'agentName']
+    : ['subagent_type', 'subagentType', 'subagent_name', 'agent_name', 'agentName']
+  let type = pick(...typeKeys)
+  if (type && AGENT_TYPE_NOISE.test(type)) type = null
+  const agent = {
+    type,
+    name: pick('agent_name', 'agentName', 'subagent_name'),
+    id: pick('agent_id', 'agentId', 'subagent_id', 'subagentId'),
+    description: pick('description', 'task', 'summary', 'title'),
+  }
+  const expert = {
+    id: pick('expert_id', 'expertId', 'expert', 'plugin_id', 'pluginId', 'pluginId1'),
+    name: pick('expert_name', 'expertName', 'plugin_name', 'pluginName'),
+    team: pick('expert_team', 'expertTeam', 'team_id', 'teamId'),
+  }
+  // 插件市场那类调用：type=expert 时把候选 ID 记成专家来源
+  if (!expert.id && /^expert$/i.test(String(src.type || ''))) {
+    const cand = ['pluginId1', 'pluginId2', 'pluginId3'].map((k) => src[k]).filter(Boolean)
+    if (cand.length) expert.id = cand.join(',')
+  }
+  return {
+    agent: (agent.type || agent.name || agent.id) ? agent : null,
+    expert: (expert.id || expert.name || expert.team) ? expert : null,
+    prompt: pick('prompt', 'task_prompt', 'instructions'),
+  }
+}
+
+function agentLabel(agent) {
+  if (!agent) return '子智能体'
+  const who = agent.type || agent.name || agent.id
+  return who ? `子智能体 ${who}` : '子智能体'
+}
+
 function recordToolCall(p, cwd, sid) {
   const name = toolNameOf(p)
   const callId = callIdOf(p)
   const args = argsOf(p)
+  const meta = metaFrom(p, args, name)
+  const keyIdOf = (name, raw) => callId || sha256(name + '\0' + raw).slice(0, 16)
   let raw = ''
   try { raw = typeof args === 'string' ? args : JSON.stringify(args) } catch { raw = String(args) }
-  const keyId = callId || sha256(name + '\0' + raw).slice(0, 16)
+  const keyId = keyIdOf(name, raw)
   const paths = artifactPaths(name, args, cwd)
   const before = paths.map((fp) => snapshot(ROOT, fp))
   const key = `${sid || ''}|${keyId}`
@@ -795,9 +862,44 @@ function recordToolCall(p, cwd, sid) {
   let evidence = null
   try { evidence = putBlob(ROOT, raw) } catch (e) { diag('证据写入失败：' + e.message) }
   append(cwd, {
-    who: 'act', sid, text: `我调了 ${name}：${squeeze(raw, 300)}`, tool: name, type: 'tool/call',
+    who: 'act', sid, text: `我调了 ${name}：${squeeze(raw, isLightTool(name) ? 160 : 300)}`, tool: name, type: 'tool/call',
     callId, eventKey: `tool:${sid || ''}:${keyId}:call`, evidence,
+    ...(meta.agent ? { agent: meta.agent } : {}),
+    ...(meta.expert ? { expert: meta.expert } : {}),
     source: { type: 'hook.pre_tool', callId },
+  })
+
+  // 子智能体：单独留一条「派出去了」，带类型、任务描述和提示原文
+  if (isAgentTool(name)) {
+    const label = agentLabel(meta.agent)
+    const desc = (meta.agent && meta.agent.description) || ''
+    const promptText = meta.prompt || ''
+    let promptBlob = null
+    if (promptText) {
+      try { promptBlob = putBlob(ROOT, promptText) } catch (e) { diag('子智能体提示写入失败：' + e.message) }
+    }
+    append(cwd, {
+      who: 'act', sid, type: 'agent/start', tool: name, callId,
+      agent: meta.agent || { type: null, name: null, id: null, description: null },
+      text: `${label}${desc ? '：' + squeeze(desc, 120) : ''}${promptText ? `；提示 ${promptText.length} 字已存证据` : ''}`,
+      evidence: promptBlob || evidence,
+      eventKey: `agent:${sid || ''}:${keyId}:start`,
+      source: { type: 'hook.pre_tool', callId },
+    })
+  }
+
+  // 专家 / 专家团队：谁被选中、从哪个工具带出来的
+  if (meta.expert) appendExpertRef(cwd, sid, meta.expert, name, keyId)
+}
+
+function appendExpertRef(cwd, sid, expert, toolName, keyId, note = '') {
+  const label = expert.team ? `专家团队 ${expert.team}` : (expert.name || expert.id || '专家')
+  const detail = expert.id && expert.name ? `（${expert.id}）` : ''
+  append(cwd, {
+    who: 'act', sid, type: 'expert/reference', tool: toolName, expert,
+    text: `专家/团队：${label}${detail}${note ? '；' + note : ''}`,
+    eventKey: `expert:${sid || ''}:${keyId}:${expert.team || expert.id || expert.name}`,
+    source: { type: 'hook.pre_tool' },
   })
 }
 
@@ -805,6 +907,7 @@ function recordToolResult(p, cwd, sid) {
   const name = toolNameOf(p)
   const callId = callIdOf(p)
   const args = argsOf(p)
+  const meta = metaFrom(p, args, name)
   let rawArgs = ''
   try { rawArgs = typeof args === 'string' ? args : JSON.stringify(args) } catch { rawArgs = String(args) }
   const keyId = callId || sha256(name + '\0' + rawArgs).slice(0, 16)
@@ -823,18 +926,41 @@ function recordToolResult(p, cwd, sid) {
     before: (entry && entry.before && entry.before.find((x) => x.path === fp)) || { path: fp, state: 'unknown' },
     after: snapshot(ROOT, fp),
   }))
+  // 轻工具的大结果不落全文，只留摘要；出错一律留全文，否则查不了原因。
+  const size = Buffer.byteLength(text || '', 'utf8')
+  const light = isLightTool(name)
+  const keepBlob = !!text && (!light || isError || size <= LIGHT_BLOB_MAX || isAgentTool(name))
   let evidence = null
-  try { evidence = putBlob(ROOT, text || '') } catch (e) { diag('证据写入失败：' + e.message) }
+  if (keepBlob) {
+    try { evidence = putBlob(ROOT, text) } catch (e) { diag('证据写入失败：' + e.message) }
+  }
   const flat = String(text || '').replace(/\s+/g, ' ').trim()
   const summary = isError ? squeeze(text, 240) + '（报错了）'
     : /^(write|edit|patch|multiedit|multi_edit|apply_patch|ops_replace)$/i.test(name) ? `我处理了 ${name}：结果已存为证据`
+    : light ? (squeeze(flat, 140) || '(无输出)') + (evidence ? '' : `（结果 ${Math.max(1, Math.round(size / 1024))} KB，未存全文）`)
     : (squeeze(flat, 220) || '(无输出)')
   append(cwd, {
     who: 'act', sid, text: summary, tool: name, type: 'tool/result',
-    callId, status: isError ? 'error' : 'completed', evidence, files,
+    callId, status: isError ? 'error' : 'completed', evidence, files, linked: !!entry,
     eventKey: `tool:${sid || ''}:${keyId}:result`,
+    ...(meta.agent ? { agent: meta.agent } : {}),
+    ...(meta.expert ? { expert: meta.expert } : {}),
     source: { type: 'hook.post_tool', callId },
   })
+
+  // 子智能体回来：结果全文存证据，附耗时与成败
+  if (isAgentTool(name)) {
+    const duration = entry && entry.ts ? Date.now() - entry.ts : null
+    append(cwd, {
+      who: 'act', sid, type: 'agent/end', tool: name, callId,
+      agent: meta.agent || null,
+      status: isError ? 'error' : 'completed',
+      durationMs: duration, evidence,
+      text: `${agentLabel(meta.agent)}结束：${isError ? '失败' : '完成'}${duration ? `，用时 ${(duration / 1000).toFixed(1)}s` : ''}；${squeeze(flat, 200) || '(无输出)'}`,
+      eventKey: `agent:${sid || ''}:${keyId}:end`,
+      source: { type: 'hook.post_tool', callId },
+    })
+  }
   if (!isError) {
     for (const file of files) {
       const { before, after } = file
@@ -927,6 +1053,27 @@ function runHook() {
 
   if (ev === 'PostToolUse') {
     recordToolResult(p, cwd, sid)
+    return
+  }
+
+  // 子会话收尾（harness 若发这个事件就给一份更完整的报告；不发也不影响上面那条 agent/end）
+  if (ev === 'SubagentStop') {
+    const meta = metaFrom(p, {}, 'Task')
+    let text = String(p.last_assistant_message || p.result || '').trim()
+    if (!text && p.transcript_path) text = tailTranscript(p.transcript_path)
+    if (!text && !meta.agent) return
+    const callId = callIdOf(p)
+    let evidence = null
+    if (text) {
+      try { evidence = putBlob(ROOT, text) } catch (e) { diag('子智能体报告写入失败：' + e.message) }
+    }
+    append(cwd, {
+      who: 'act', sid, type: 'agent/report', tool: 'Task', callId,
+      agent: meta.agent, status: p.is_error ? 'error' : 'completed', evidence,
+      text: `${agentLabel(meta.agent)}收尾报告：${squeeze(text, 200) || '(无输出)'}`,
+      eventKey: `agent:${sid || ''}:${callId || sha256(text).slice(0, 16)}:report`,
+      source: { type: 'hook.subagent_stop', callId },
+    })
     return
   }
 
@@ -1066,6 +1213,13 @@ switch (cmd) {
     try { bytes = statSync(STREAM).size } catch {}
     console.log(`[memory] ${dayOf(Date.now())} 记录 ${store.records.length} · 原话 ${store.docs.filter((d) => d && (d.who === 'he' || d.who === 'me')).length} · 段 ${store.episodes.length} · ${kb(bytes)} · 记下 ${store.marks.length}`)
     console.log(`账本 ${h.status} · 异常 ${h.problems.length} · 证据 ${h.blobs} 个 · 老记录无指纹 ${h.noHash} · ${ROOT}`)
+    const agentRecs = store.records.filter((r) => r && typeof r.type === 'string' && r.type.startsWith('agent/')).length
+    const expertRecs = store.records.filter((r) => r && r.type === 'expert/reference').length
+    let maintRoot = null
+    try { maintRoot = JSON.parse(readFileSync(join(ROOT, 'maintenance.json'), 'utf8').replace(/^\uFEFF/, '')).root || null } catch {}
+    const sameRoot = maintRoot ? resolve(maintRoot).toLowerCase() === resolve(ROOT).toLowerCase() : null
+    console.log(`子智能体 ${agentRecs} 条 · 专家引用 ${expertRecs} 条 · 维护 ${maintRoot ? (sameRoot ? '指向本库' : '根不一致 → ' + maintRoot) : '还没跑过'}`)
+    if (sameRoot === false) process.exitCode = 1
     if (h.status !== 'OK') process.exitCode = 1
     break
   }

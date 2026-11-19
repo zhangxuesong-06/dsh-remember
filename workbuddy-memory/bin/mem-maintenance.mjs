@@ -2,11 +2,14 @@
 // WorkBuddy 维护：校验、快照、保留、无引用 blob 清理。
 // 由 SessionStart hook 以 --due 触发；不注册系统计划任务。
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { createIntegrity, scan, verifyBlobs } from './mem-evidence.mjs'
+import { createIntegrity, scan, verifyBlobs, resolveRoot } from './mem-evidence.mjs'
 
-const root = path.resolve(process.env.WORKBUDDY_MEM_HOME || path.join(os.homedir(), '.workbuddy', 'mem'))
+// 根目录必须和 hook / CLI 一致：共用 resolveRoot，只有 --root 或 WORKBUDDY_MEM_HOME 才改道。
+const rootArgIndex = process.argv.indexOf('--root')
+const root = rootArgIndex >= 0 && process.argv[rootArgIndex + 1]
+  ? path.resolve(process.argv[rootArgIndex + 1])
+  : resolveRoot()
 const maintenanceFile = path.join(root, 'maintenance.json')
 const snapshotsRoot = path.join(root, 'snapshots')
 const SMALL = ['integrity.json', 'stream.jsonl', 'marks.jsonl', 'pending.json', 'config.json']
@@ -61,9 +64,15 @@ function rowsFrom(dir) {
 function collectHashes(value, out = new Set()) {
   if (!value || typeof value !== 'object') return out
   if (typeof value.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256)) out.add(value.sha256)
-  for (const v of Object.values(value)) if (v && typeof v === 'object') collectHashes(v, out)
+  for (const v of Object.values(value)) {
+    if (typeof v === 'string') {
+      // 证据也可能被写成裸字符串（老格式），别让清理把还在用的 blob 当孤儿删掉
+      if (/^[a-f0-9]{64}$/.test(v)) out.add(v)
+    } else if (v && typeof v === 'object') visit(v, out)
+  }
   return out
 }
+function visit(value, out) { collectHashes(value, out) }
 function verifyRoot() {
   let v
   try { v = integrity.verify() } catch (error) { return { status: 'BUSY', problems: [{ reason: error.message }], blobs: 0 } }
@@ -94,7 +103,12 @@ function snapshotOnce() {
     const sv = createIntegrity(target, ['stream.jsonl', 'marks.jsonl']).verify()
     const bv = verifyBlobs(target, rowsFrom(target))
     if (sv.status === 'BAD' || bv.problems.length) throw new Error('snapshot verify failed')
-    const manifest = { createdAt: new Date().toISOString(), root, name: stamp, blobs: { linked, copied }, verify: { status: sv.status, blobs: bv.checked } }
+    const streamScan = scan(path.join(target, 'stream.jsonl'))
+    const manifest = {
+      createdAt: new Date().toISOString(), root, name: stamp,
+      stream: { bytes: streamScan.bytes.length, records: streamScan.rows.length },
+      blobs: { linked, copied }, verify: { status: sv.status, blobs: bv.checked },
+    }
     atomicWrite(path.join(target, 'manifest.json'), manifest)
     return manifest
   } catch (error) {

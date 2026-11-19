@@ -42,24 +42,33 @@ console.log('备份 ' + backup)
 settings.hooks = settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {}
 const command = 'node "' + path.join(binDir, 'mem.mjs').replace(/\\/g, '/') + '" hook 2>/dev/null || true'
 const hasSelf = (group) => (group.hooks || []).some((h) => String(h && h.command || '').includes('self-memory'))
-function ensure(event, matcher) {
-  const list = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : (settings.hooks[event] = [])
-  if (list.some(hasSelf)) return false
-  const group = { hooks: [{ type: 'command', command, timeout: 10 }] }
+
+// 覆盖式注册：每次安装都按当前清单重写和 self-memory 有关的条目，
+// 这样工具范围（matcher）升级才真的能生效；别人的 hook 一个不动。
+function upsert(event, { matcher = null, timeout = 10 } = {}) {
+  const list = (Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []).filter((g) => !hasSelf(g))
+  const group = { hooks: [{ type: 'command', command, timeout }] }
   if (matcher) group.matcher = matcher
   list.push(group)
-  return true
+  settings.hooks[event] = list
 }
 
-const added = []
-if (ensure('SessionStart')) added.push('SessionStart')
-if (ensure('UserPromptSubmit')) added.push('UserPromptSubmit')
-if (ensure('PreToolUse', 'Bash|Write|Edit|MultiEdit|NotebookEdit')) added.push('PreToolUse')
-if (ensure('PostToolUse', 'Bash|Write|Edit|MultiEdit|NotebookEdit')) added.push('PostToolUse')
-if (ensure('Stop')) added.push('Stop')
+// 记录范围：写/改/跑之外，读和查也算「当时看到过什么」，子智能体（Task/Agent）与网络取回也要留证据。
+// 轻工具（Read/Grep/Glob…）的全文在运行时按策略截断，不会把大文件塞进证据库。
+const TOOLS = 'Bash|Write|Edit|MultiEdit|NotebookEdit|PowerShell|Read|Grep|Glob|Task|Agent|WebFetch|WebSearch'
+
+const registered = []
+upsert('SessionStart')
+upsert('UserPromptSubmit')
+upsert('PreToolUse', { matcher: TOOLS })
+upsert('PostToolUse', { matcher: TOOLS, timeout: 20 })
+upsert('Stop')
+upsert('SubagentStop', { timeout: 20 })
+registered.push('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop')
 
 const tmp = settingsPath + '.tmp'
 fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8')
 fs.renameSync(tmp, settingsPath)
-console.log(added.length ? '已挂 hook：' + added.join(', ') : 'hook 已存在，未重复添加')
+console.log('已注册 hook：' + registered.join(', '))
+console.log('捕获工具：' + TOOLS)
 console.log('重开一次 WorkBuddy 让新 hook 生效。')

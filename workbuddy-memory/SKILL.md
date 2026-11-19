@@ -12,7 +12,7 @@ agent_created: true
 
 | 层 | 是什么 | 谁负责 |
 |---|---|---|
-| **流** | `~/.workbuddy/mem/stream.jsonl`，一条一行、只增不改，每条带 `ws`（哪个工作区） | hook（不经过我） |
+| **流** | `~/.agent-memory/workbuddy/stream.jsonl`，一条一行、只增不改，每条带 `ws`（哪个工作区） | hook（不经过我） |
 | **证据** | `blobs/` 按 SHA-256 保存完整工具输出和文件前后版本；`integrity.json` 记录当前基线 | 脚本 |
 | **段** | 按「一次见面 / 一件事」切，只留标题和编号 | 脚本 |
 | **线索** | 每轮最多 3 行「这事你以前碰过」，只给段号和日期 | 脚本，注入到上下文 |
@@ -22,15 +22,21 @@ agent_created: true
 
 ## 写入是怎么来的（不靠自觉）
 
-`~/.workbuddy/settings.json` 里挂了五个 hook，都指向 `bin/mem.mjs hook`：
+`~/.workbuddy/settings.json` 里挂了六个 hook，都指向 `bin/mem.mjs hook`：
 
 | 事件 | 记什么 |
 |---|---|
-| `SessionStart` | 不记，**输出**「醒来块」注入上下文 |
+| `SessionStart` | 不记，**输出**「醒来块」注入上下文；顺带跑一次维护 |
 | `UserPromptSubmit` | 记用户这句话；顺手算 0–3 行线索 |
-| `PreToolUse`（Bash/Write/Edit/MultiEdit/NotebookEdit） | 记调用、完整入参证据；写入类先存文件前版本 |
-| `PostToolUse`（同一组） | 记完整结果/错误；成功写入存后版本并生成产物索引 |
+| `PreToolUse` | 记调用与入参证据；写入类先存文件前版本；子智能体另记 `agent/start`，专家另记 `expert/reference` |
+| `PostToolUse` | 记结果/错误；成功写入存后版本并生成产物索引；子智能体回来记 `agent/end`（含耗时、结果全文） |
 | `Stop` | 记我最后说的那段话（完整，不截断） |
+| `SubagentStop` | 子会话收尾报告（harness 发这个事件时才记，记成 `agent/report`） |
+
+记录范围：`Bash|Write|Edit|MultiEdit|NotebookEdit|PowerShell|Read|Grep|Glob|Task|Agent|WebFetch|WebSearch`。
+读类工具（Read/Grep/Glob/WebSearch…）只留摘要和小样本，结果超过 256 KB 不落全文；写/跑类工具一律存完整证据，出错也存。
+
+**子智能体 / 专家怎么追**：`agent/start` 带 `agent.type`（如 explore）、`agent.description`、提示原文（证据）；`agent/end` 带成败、耗时与结果全文；专家记为 `expert/reference`，带 `expert.id` / `expert.name` / `expert.team`。`health` 会报这两类各有多少条。
 
 所以「模型忘了写」这件事不存在。改完 settings 不热加载，**要重开一次 WorkBuddy 才生效**。
 
@@ -69,9 +75,11 @@ node "$M" maintenance --prune          # 默认只试算
 node "$M" index build                  # 重建 SQLite FTS 派生索引
 ```
 
-`SessionStart` 会以 detached 子进程运行 `mem-maintenance --due`，默认 12 小时一次；不注册 Windows 计划任务。快照存 `~/.workbuddy/mem/snapshots/`，JSONL 复制、blob 硬链接，默认保留 14 份；`--prune` 只清未被引用且超过 30 天的 blob。
+`SessionStart` 会以 detached 子进程运行 `mem-maintenance --due`，默认 12 小时一次；不注册 Windows 计划任务。快照存 `~/.agent-memory/workbuddy/snapshots/`，JSONL 复制、blob 硬链接，默认保留 14 份；`--prune` 只清未被引用且超过 30 天的 blob。
 
-检索优先用 `~/.workbuddy/mem/index.db`（SQLite FTS5）：
+维护进程和 hook 走同一个根（`mem-evidence.resolveRoot()`）：只有 `WORKBUDDY_MEM_HOME` 能改道，没有第二套默认路径。所以「备份的是哪份库」不需要猜——`maintenance.json` 里的 `root` 必须等于 `health` 打印的根，不一致时 `health` 直接以退出码 1 报出来。
+
+检索优先用 `~/.agent-memory/workbuddy/index.db`（SQLite FTS5）：
 - `index.db` 是派生层，删了可重建，`stream.jsonl` 仍是唯一真相；
 - 索引缺失或写入失败时，hook 自动回退到原来的全量读取；
 - 每次追加会增量更新索引，不需要每个 hook 重读全库；
@@ -93,8 +101,8 @@ node "$M" index build                  # 重建 SQLite FTS 派生索引
 - 只记文本：图片、附件内容不进库。
 - 一个库管所有工作区，靠 `ws` 区分——换个文件夹问旧事也翻得到，这是刻意的。
 - 数据在本地明文，含用户原话。别把它整份粘进对话或外发。
-- 备份 = 复制整个 `~/.workbuddy/mem/`；清空 = 删 `stream.jsonl`（存档先改名）。
-- 调参看 `~/.workbuddy/mem/config.json`：`captureTools`、`truncate`（默认关）、`capChars`、`primeMax`、`primeMaxDf`、`primeFreshMin`、`recency`。
+- 备份 = 复制整个 `~/.agent-memory/workbuddy/`；清空 = 删 `stream.jsonl`（存档先改名）。
+- 调参看 `~/.agent-memory/workbuddy/config.json`：`captureTools`、`truncate`（默认关）、`capChars`、`primeMax`、`primeMaxDf`、`primeFreshMin`、`recency`。
 - 文件版本只覆盖有明确路径的写入工具；shell 改文件只有调用和结果证据。单文件快照上限 8 MiB，超限会标 `oversize`。
 - `verify` 的 OK 只证明“接纳基线之后字节没被改/删/重排/截尾”，不证明内容真实，也不证明基线之前没丢过。`sync` 不修复坏字节。
 - `diag.log` 里是 hook 失败记录；如果「数字不涨」，先看它。
