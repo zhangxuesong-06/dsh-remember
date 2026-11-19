@@ -62,6 +62,16 @@ export function readSessionFile(path) {
 
 // 一个工作区里所有会话（不含子会话）
 export function listSessions(sessionsRoot, cwd) {
+  return listAll(sessionsRoot, cwd, false)
+}
+
+// 一个工作区里的子代理会话（delegationDepth > 0 或 origin === 'subagent'）。
+// 只用于补工具/产物证据；对话不写。
+export function listSubagentSessions(sessionsRoot, cwd) {
+  return listAll(sessionsRoot, cwd, true)
+}
+
+function listAll(sessionsRoot, cwd, subagents) {
   const out = []
   let dirs = []
   try { dirs = readdirSync(sessionsRoot, { withFileTypes: true }) } catch { return out }
@@ -74,15 +84,23 @@ export function listSessions(sessionsRoot, cwd) {
     try { entries = readdirSync(dir, { withFileTypes: true }) } catch { continue }
     for (const s of entries) {
       if (!s.isDirectory()) continue
-      const f = join(dir, s.name, 'session.v4.jsonl.zstd')
-      if (!existsSync(f)) continue
+      const base = join(dir, s.name)
+      // v4 文件信息更全（带 turn/step、更完整的事件），两个都在时优先它；
+      // 只有旧格式 `session.jsonl.zstd` 的老会话也要能用，不能因为文件名不同就丢掉。
+      let f = null
+      for (const name of ['session.v4.jsonl.zstd', 'session.jsonl.zstd']) {
+        const candidate = join(base, name)
+        if (existsSync(candidate)) { f = candidate; break }
+      }
+      if (!f) continue
       let size = 0
       try { size = statSync(f).size } catch { continue }
       if (size < 512) continue
       const parsed = readSessionFile(f)
       if (!parsed || !parsed.header) continue
       if (norm(parsed.header.cwd) !== want) continue
-      if ((parsed.header.delegationDepth || 0) > 0) continue
+      const deep = (parsed.header.delegationDepth || 0) > 0 || parsed.header.origin === 'subagent'
+      if (deep !== subagents) continue
       out.push({ id: parsed.header.id, path: f, mtime: parsed.mtime, header: parsed.header, events: parsed.events })
     }
   }

@@ -48,6 +48,17 @@ node zcode-memory/bin/cli.mjs backfill --session sess_xxx --since 7d
 哈希双重去重，重复执行不增行；来源标 `db.backfill`，`verify` 仍按原账本校验。找不到正文的轮
 只计数，不猜。
 
+子代理的证据链单独补：
+
+```bash
+node zcode-memory/bin/cli.mjs backfill --subagents --dry-run
+node zcode-memory/bin/cli.mjs backfill --subagents
+```
+
+只读 `session.task_type='subagent_child'`：任务提示标成 `who:meta` / `type:subagent/task`，
+然后补 `tool/call`、`tool/result` 和 `artifact`。**不写子代理与主模型之间的对话**，避免把
+模型提示当成用户原话。产物只能拿当前快照，`versions.before` 明确标 `unknown`。
+
 ## 维护
 
 SessionStart 会 detached 触发 `tools/maintenance.mjs --due`，默认 12 小时一次；

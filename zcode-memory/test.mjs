@@ -229,6 +229,7 @@ console.log('11) 从 ZCode 数据库回填')
   const db = new DatabaseSync(dbFile)
   db.exec('create table message(id text primary key, session_id text, time_created integer, data text)')
   db.exec('create table part(id text primary key, message_id text, session_id text, time_created integer, data text)')
+  db.exec('create table session(id text primary key, parent_id text, directory text, task_type text, title text, time_created integer)')
   const t0 = Date.now() - 60 * 60 * 1000
   const prompt = (turn, text, ts) => hook({ hook_event_name: 'UserPromptSubmit', prompt: text, turnId: turn, session_id: 'sess_bf', timestamp: ts })
   prompt('bf1', '回填窗口一', t0)
@@ -249,6 +250,28 @@ console.log('11) 从 ZCode 数据库回填')
   add('2', t0 + 11_000, '回答二')
   add('3', t0 + 22_000, '回答三')
   add('6', t0 + 51_000, '回答一')
+
+  // 子代理会话：任务提示 + 两个工具（一个 Bash，一个 Write 产物）。
+  const subFile = join(ws, 'sub-written.txt')
+  writeFileSync(subFile, 'sub file', 'utf8')
+  db.prepare('insert into session values(?,?,?,?,?,?)')
+    .run('sess_sub', 'sess_bf', ws, 'subagent_child', '子代理', t0 + 60_000)
+  const addMsg = (id, role, ts) => db.prepare('insert into message values(?,?,?,?)')
+    .run(id, 'sess_sub', ts, JSON.stringify({ role }))
+  const addPart = (id, msg, ts, data) => db.prepare('insert into part values(?,?,?,?,?)')
+    .run(id, msg, 'sess_sub', ts, JSON.stringify(data))
+  addMsg('m-task', 'user', t0 + 60_000)
+  addPart('p-task', 'm-task', t0 + 60_000, { type: 'text', text: '只读探查目录，不要修改' })
+  addMsg('m-tool1', 'assistant', t0 + 61_000)
+  addPart('p-tool1', 'm-tool1', t0 + 61_000, {
+    type: 'tool', callID: 'sc1', tool: 'Bash',
+    state: { status: 'completed', input: { command: 'echo hi' }, output: 'hi\n' },
+  })
+  addMsg('m-tool2', 'assistant', t0 + 62_000)
+  addPart('p-tool2', 'm-tool2', t0 + 62_000, {
+    type: 'tool', callID: 'sc2', tool: 'Write',
+    state: { status: 'completed', input: { file_path: subFile, content: 'sub file' }, output: 'ok' },
+  })
   db.close()
 
   const bfEnv = { ...env, ZCODE_DB: dbFile }
@@ -280,6 +303,16 @@ console.log('11) 从 ZCode 数据库回填')
     return { ...JSON.parse(res.stdout), before, after: rows().length }
   })()
   ok('--dry-run 报将补但实际不写', dry.filled === 1 && dry.after === dry.before, JSON.stringify({ filled: dry.filled, before: dry.before, after: dry.after }))
+
+  const sub1 = cli(['backfill', '--subagents', '--session', 'sess_sub'], bfEnv)
+  const subJson = JSON.parse(sub1.stdout)
+  ok('子代理回填任务提示+两次调用+结果+产物', sub1.code === 0 && subJson.filled === 6, sub1.stdout.slice(0, 160))
+  const subRows = rows().filter((r) => r.sid === 'sess_sub')
+  ok('任务提示标 meta，不写成用户原话', subRows.some((r) => r.type === 'subagent/task' && r.who === 'meta') && !subRows.some((r) => r.type === 'user/message'))
+  ok('子代理工具与产物带 sid', subRows.some((r) => r.type === 'tool/call' && r.callId === 'sc1') && subRows.some((r) => r.type === 'artifact' && r.path === subFile))
+  ok('产物记录标明 before unknown', subRows.find((r) => r.type === 'artifact').versions.before.state === 'unknown')
+  const sub2 = cli(['backfill', '--subagents', '--session', 'sess_sub'], bfEnv)
+  ok('子代理回填重复执行不增行', JSON.parse(sub2.stdout).filled === 0 && JSON.parse(sub2.stdout).skipped === 6)
 }
 
 console.log('12) 篡改能被检出（独立临时库）')

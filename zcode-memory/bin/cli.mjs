@@ -30,6 +30,8 @@ function usage() {
   maint <参数>         转给 tools/maintenance.mjs（verify/sync/backup/prune/report/due）
   backfill [--db 路径] [--session sid] [--since 7d] [--dry-run]
                        从 ZCode 数据库回填缺失的助手回答（只读库、幂等）
+  backfill --subagents [--session sid] [--dry-run]
+                       回填子代理的工具/产物证据（任务提示标 meta，不写模型对话）
   workspaces           有哪些工作区
   verify               校验账本（OK / BAD，BAD 时退出码 1）
   sync                 把当前内容接纳为基线

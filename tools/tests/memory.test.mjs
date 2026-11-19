@@ -11,6 +11,7 @@ import { injectBackground } from '../mem-context.mjs'
 import { setupMemory } from '../mem-plugin.mjs'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const root = fs.mkdtempSync(path.join(base, 'memory-test-'))
 process.env.OPENCODE_MEM_HOME = root
 process.env.MEMORY_DISABLE_MAINTENANCE = '1'

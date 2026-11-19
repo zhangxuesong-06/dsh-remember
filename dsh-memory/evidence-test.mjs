@@ -8,6 +8,7 @@ import { eventToRecords } from './lib/capture.mjs'
 import { readBlob } from './lib/evidence.mjs'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const root = fs.mkdtempSync(path.join(base, 'dsh-evidence-'))
 let n = 0
 const pass = []

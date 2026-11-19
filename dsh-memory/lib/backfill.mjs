@@ -6,8 +6,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DSH_HOME, SESSIONS_DIR } from './config.mjs'
-import { listSessions } from './session-file.mjs'
+import { listSessions, listSubagentSessions } from './session-file.mjs'
 import { eventToRecords, eventKey } from './capture.mjs'
+import { filterSubagentRecords } from './subagent.mjs'
 
 export function archivedSessionIds() {
   const set = new Set()
@@ -60,6 +61,40 @@ export function backfill(ledger, cwd, cfg = {}, allow = null) {
       if (key !== null) ledger.noteSeq(s.id, key)
     }
   }
-  if (added) ledger.seal(true)
-  return { added, sessions: used }
+
+  // ——— 子代理 ———
+  // 只补证据链：任务提示（who=meta）、tool/call、tool/result、artifact。
+  // 子代理的 user/assistant 对话是模型之间的话，不写进「他说的/我说的」。
+  let subagents = 0
+  let subagentAdded = 0
+  if (cfg.backfillSubagents !== false) {
+    let subs = []
+    try { subs = listSubagentSessions(SESSIONS_DIR, cwd) } catch {}
+    const seenTask = new Set()
+    for (const s of subs) {
+      if (skip.has(s.id)) continue
+      // 多线文件夹：按父会话归属判断；父会话没登记就不碰。
+      if (typeof allow === 'function' && !allow(s.header.parentSession || s.id)) continue
+      subagents += 1
+      const pending = new Map()
+      for (const ev of s.events) {
+        const key = eventKey(ev)
+        if (key !== null && ledger.seenSeq(s.id, key)) continue
+        const recs = filterSubagentRecords(
+          eventToRecords(ev, { sid: s.id, root: ledger.dir, cwd, pending }),
+          { sid: s.id, header: s.header, seenTask },
+        )
+        for (const r of recs) {
+          const fp = `${s.id}|${r.ts || 0}|${r.who || ''}|${String(r.text || '').slice(0, 40)}`
+          if (seen.has(fp)) continue
+          seen.add(fp)
+          ledger.append({ ...r, sid: s.id }, { dedupe: false })
+          subagentAdded += 1
+        }
+        if (key !== null) ledger.noteSeq(s.id, key)
+      }
+    }
+  }
+  if (added || subagentAdded) ledger.seal(true)
+  return { added, sessions: used, subagents, subagentAdded }
 }

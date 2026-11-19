@@ -109,7 +109,7 @@ switch (cmd) {
   case 'backfill': {
     const r = backfill(ledger, cwd, cfg)
     ledger.seal(true)
-    console.log(`回填：${r.sessions} 份会话，${r.added} 条记录`)
+    console.log(`回填：${r.sessions} 份会话，${r.added} 条记录；子代理 ${r.subagents || 0} 份，${r.subagentAdded || 0} 条证据`)
     console.log(`现在：${ledger.episodes.length} 段，${ledger.stats().traces} 句原话`)
     break
   }

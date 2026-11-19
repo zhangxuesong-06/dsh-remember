@@ -6,6 +6,7 @@ import { detectHarnesses, chooseHarness } from './detect.mjs'
 import { planInstall, execute } from './install.mjs'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const root = fs.mkdtempSync(path.join(base, 'agent-memory-test-'))
 const repo = path.join(root, 'repo')
 let pass = 0

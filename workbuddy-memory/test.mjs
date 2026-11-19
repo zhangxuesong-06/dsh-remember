@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const mem = process.env.WORKBUDDY_TEST_BIN || path.join(here, 'bin', 'mem.mjs')
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const root = fs.mkdtempSync(path.join(base, 'wb-memory-'))
 const env = { ...process.env, WORKBUDDY_MEM_HOME: root, WORKBUDDY_DISABLE_MAINTENANCE: '1' }
 let pass = 0

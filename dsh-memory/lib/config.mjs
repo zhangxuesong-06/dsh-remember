@@ -46,6 +46,8 @@ export const DEFAULT_CFG = {
   humanName: 'human',
   // 挂载时把该工作区已有的会话倒进来（只倒一次，靠 seq 去重）
   backfillOnMount: true,
+  // 子代理会话只补证据链（任务提示 + 工具/产物），不写模型之间的对话
+  backfillSubagents: true,
   // 归档的会话不算记忆（他手动收起来的东西，别自作主张捞回来）
   includeArchived: false,
   // 每轮那三行「这事你以前碰过」

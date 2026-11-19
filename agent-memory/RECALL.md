@@ -60,6 +60,10 @@ node zcode-memory/bin/cli.mjs maint verify
 ```
 
 回填只读 ZCode 的 `db.sqlite`，按时间窗取该轮最后一条 assistant 正文，幂等；找不到正文的轮只计数。
+子代理的证据链用 `backfill --subagents` 单独补（任务提示标 `meta`，不写模型间对话）。
+
+DSH 的回填同时支持 `session.v4.jsonl.zstd` 和旧格式 `session.jsonl.zstd`；两个都在时优先 v4。
+DSH 子代理只补证据链（任务提示标 `meta`，工具/产物保留，模型间对话不写）。
 
 ## 迁移
 

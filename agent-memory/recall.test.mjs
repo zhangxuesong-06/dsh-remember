@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const tmp = fs.mkdtempSync(path.join(base, 'cross-test-'))
 const ocRoot = path.join(tmp, 'oc')
 const dshHome = path.join(tmp, 'dsh')

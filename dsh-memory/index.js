@@ -37,6 +37,7 @@ import {
 } from './lib/config.mjs'
 import { eventToRecords, setCaptureLog, setCaptureHuman } from './lib/capture.mjs'
 import { backfill } from './lib/backfill.mjs'
+import { isSubagent, filterSubagentRecords } from './lib/subagent.mjs'
 import { anchorBlock, anchorCutoff, primingBlock, emotionCueBlock, recallBlock, traceBlock, factsBlock, arrivalBlock, dayOf, selfLines, strengthOf, sid8, lineOfDoc } from './lib/assemble.mjs'
 import { search } from './lib/retrieve.mjs'
 import { readBlob } from './lib/evidence.mjs'
@@ -113,6 +114,7 @@ export function apply(ctx) {
   const settleTimers = new Map()
   const compactNotes = new Map() // sid -> { tokens, from, to, at, delivered }
   const turnStamp = new Map()    // sid -> 走到第几个回合（预激活只按回合算，不按 step 算）
+  const subagentTasks = new Set() // 子代理会话 -> 已经写过任务提示（每场只写一次）
 // 0.2.13 沉默闸：这个会话里已经浮过的段（不重复端上来），以及连续多少轮没浮过（决定要不要补一条兜底）
 const shownBySid = new Map()   // sid -> Set<epId>
 const idleTurns = new Map()    // sid -> 连续没浮的轮数
@@ -194,7 +196,11 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
         // sid 和线名都要传进去：群消息的去重键按**线**隔离（不是按会话），
         // 否则同一条线开个新会话，同一批消息会在同一个库里再记一遍。
         const recs = eventToRecords(event, { sid, line: line && line.name, root: l.dir, cwd, pending: pendingFor(l) })
-        for (const r of recs) l.append({ ...r, sid })
+        // 子代理：只留任务提示(meta) + 工具/产物，不把模型之间的对话写成「他说的/我说的」。
+        const use = isSubagent(header)
+          ? filterSubagentRecords(recs, { sid, header, seenTask: subagentTasks })
+          : recs
+        for (const r of use) l.append({ ...r, sid })
         if (typeof seq === 'number') l.noteSeq(sid, seq)
         if (event && (event.type === 'turn/end' || event.type === 'session/title')) settleSoon(l)
         if (event && event.type === 'turn/start') turnStamp.set(sid, (turnStamp.get(sid) || 0) + 1)

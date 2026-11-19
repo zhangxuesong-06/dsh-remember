@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { plan, migrate, sync } from './migrate.mjs'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const tmp = fs.mkdtempSync(path.join(base, 'migrate-test-'))
 const repo = path.join(tmp, 'repo')
 const legacyOc = path.join(tmp, 'legacy-oc')

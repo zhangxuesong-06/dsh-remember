@@ -5,6 +5,7 @@ import { test, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
+fs.mkdirSync(base, { recursive: true })
 const tmp = fs.mkdtempSync(path.join(base, 'coverage-test-'))
 const ocRoot = path.join(tmp, 'oc')
 const dshHome = path.join(tmp, 'dsh')
