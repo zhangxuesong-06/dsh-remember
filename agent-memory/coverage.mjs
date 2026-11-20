@@ -6,28 +6,11 @@
 // 边界：只读 stream.jsonl，不建目录、不写缓存；工具行不参与配对（OpenCode 的工具在
 // tools.jsonl 里，不在共享流里）。判定用文件顺序，不用时间戳排序——补写的旧记录
 // 时间可能倒序，顺序才是写入事实。
-import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { streams } from './repo.mjs'
+import { readStream, streams } from './repo.mjs'
 
 const USER = new Set(['he', 'user'])
 const ME = new Set(['me', 'assistant'])
-
-function readJsonl(file) {
-  let text
-  try { text = fs.readFileSync(file, 'utf8') } catch { return { rows: [], skipped: 0, missing: true } }
-  const rows = []
-  let skipped = 0
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const raw = JSON.parse(line)
-      if (raw && typeof raw === 'object') rows.push(raw)
-      else skipped += 1
-    } catch { skipped += 1 }
-  }
-  return { rows, skipped, missing: false }
-}
 
 function kindOf(raw, source) {
   if (source === 'opencode') return String(raw.kind || raw.type || '')
@@ -47,51 +30,39 @@ function sidOf(raw) {
 }
 
 // 一轮 = 一条用户消息到「下一条用户消息之前」。answered 表示这一轮里有助手消息。
-function analyse(rows, source) {
+function analyse(entries, source) {
   const sessions = new Map()
-  for (let i = 0; i < rows.length; i++) {
-    const raw = rows[i]
+  for (const { row: raw, line } of entries) {
     const sid = sidOf(raw)
     let s = sessions.get(sid)
     if (!s) {
-      s = { sid, turns: 0, answered: 0, assistant: 0, orphans: 0, firstLine: null, lastLine: null, missingTurns: [] }
+      s = { sid, turns: 0, answered: 0, assistant: 0, orphans: 0, turnsList: [], lastAssistantLine: 0 }
       sessions.set(sid, s)
     }
-    s.lastLine = i + 1
-    if (s.firstLine === null) s.firstLine = i + 1
-
     if (isMessage(raw, source, 'user')) {
-      if (s.current) s.current.lineEnd = i + 1
-      s.current = { line: i + 1, answered: false, ts: raw.ts || 0 }
+      s.current = { line, answered: false, ts: raw.ts || 0 }
       s.turns += 1
-      s.turnsList = s.turnsList || []
       s.turnsList.push(s.current)
       continue
     }
     if (isMessage(raw, source, 'assistant')) {
       s.assistant += 1
-      s.assistantLines = s.assistantLines || []
-      s.assistantLines.push(i + 1)
+      s.lastAssistantLine = line
       if (s.current) s.current.answered = true
       else s.orphans += 1
     }
   }
   for (const s of sessions.values()) {
-    for (const t of s.turnsList || []) if (t.answered) s.answered += 1
-    for (const t of s.turnsList || []) if (!t.answered) {
-      s.missingTurns.push({ line: t.line, ts: t.ts })
-      if (s.missingTurns.length > 50) break
-    }
-    // 硬缺口：这一轮之后整场会话里再没有任何助手记录。
-    // 用户连发几条时，第一条会被「严格口径」算成未答，但回答其实合并到了后面；
-    // 只有「后面也一直没有」才更像真的没接住。
-    s.silentTurns = 0
-    s.silentLines = []
-    for (const t of s.turnsList || []) {
-      if (t.answered) continue
-      if (!s.assistantLines || !s.assistantLines.some((line) => line > t.line)) {
-        s.silentTurns += 1
-        s.silentLines.push({ line: t.line, ts: t.ts })
+    s.unanswered = 0
+    s.silent = 0
+    for (const turn of s.turnsList) {
+      if (turn.answered) { s.answered += 1; continue }
+      const ref = { line: turn.line, ts: turn.ts }
+      s.unanswered += 1
+      s.firstMissing ??= ref
+      if (turn.line > s.lastAssistantLine) {
+        s.silent += 1
+        s.firstSilent ??= ref
       }
     }
   }
@@ -105,8 +76,9 @@ function toolPairing(rows, source) {
     const kind = kindOf(raw, source)
     const id = raw.callId || raw.callID || raw.tool_call_id || null
     if (!id) continue
-    if (kind === 'tool/call') calls.set(id, raw)
-    else if (kind === 'tool/result') results.set(id, raw)
+    const key = JSON.stringify([sidOf(raw), id])
+    if (kind === 'tool/call') calls.set(key, raw)
+    else if (kind === 'tool/result') results.set(key, raw)
   }
   let noResult = 0
   let noCall = 0
@@ -121,9 +93,10 @@ export function coverage({ source = null, since = null, now = Date.now() } = {})
   for (const entry of list) {
     if (source && entry.source !== source) continue
     const file = entry.path
-    const data = readJsonl(file)
-    const rows = since ? data.rows.filter((r) => !r.ts || r.ts >= since) : data.rows
-    const sessions = analyse(rows, entry.source)
+    const data = readStream(file)
+    const entries = since ? data.entries.filter(({ row }) => !row.ts || row.ts >= since) : data.entries
+    const rows = entries.map(({ row }) => row)
+    const sessions = analyse(entries, entry.source)
     const tools = toolPairing(rows, entry.source)
     let turns = 0
     let answered = 0
@@ -137,13 +110,13 @@ export function coverage({ source = null, since = null, now = Date.now() } = {})
       turns += s.turns
       answered += s.answered
       assistant += s.assistant
-      unanswered += s.missingTurns.length
-      silent += s.silentTurns || 0
-      if (s.missingTurns.length) {
-        worst.push({ sid: s.sid, turns: s.turns, answered: s.answered, missing: s.missingTurns.length, firstMissing: s.missingTurns[0] })
+      unanswered += s.unanswered
+      silent += s.silent
+      if (s.unanswered) {
+        worst.push({ sid: s.sid, turns: s.turns, answered: s.answered, missing: s.unanswered, firstMissing: s.firstMissing })
       }
-      if (s.silentLines && s.silentLines.length) {
-        worstSilent.push({ sid: s.sid, silentCount: s.silentLines.length, first: s.silentLines[0] })
+      if (s.silent) {
+        worstSilent.push({ sid: s.sid, silentCount: s.silent, first: s.firstSilent })
       }
     }
     for (const r of rows) if (Number(r.ts) > lastTs) lastTs = Number(r.ts)
@@ -175,7 +148,7 @@ export function coverage({ source = null, since = null, now = Date.now() } = {})
     })
   }
   // 与 recall.mjs 保持同一来源顺序，输出才稳定可比。
-  const order = { opencode: 0, dsh: 1, workbuddy: 2, zcode: 3 }
+  const order = { opencode: 0, dsh: 1, workbuddy: 2, zcode: 3, codex: 4 }
   out.sort((a, b) => (order[a.source] ?? 9) - (order[b.source] ?? 9))
   return out
 }
@@ -226,7 +199,7 @@ function main() {
     else if (a === '--source') opts.source = argv[++i] || null
     else if (a === '--since') opts.since = parseSince(argv[++i])
     else if (a === '--help' || a === '-h') {
-      console.log('用法：node agent-memory/coverage.mjs [--source opencode|dsh|workbuddy|zcode] [--since 7d] [--json] [--worst]')
+      console.log('用法：node agent-memory/coverage.mjs [--source opencode|dsh|workbuddy|zcode|codex] [--since 7d] [--json] [--worst]')
       return
     }
   }

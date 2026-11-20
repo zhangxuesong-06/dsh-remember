@@ -3,12 +3,14 @@ import * as dsh from './dsh.mjs'
 import * as opencode from './opencode.mjs'
 import * as workbuddy from './workbuddy.mjs'
 import * as zcode from './zcode.mjs'
+import * as codex from './codex.mjs'
 
 export const ADAPTERS = {
   [dsh.meta.id]: dsh,
   [opencode.meta.id]: opencode,
   [workbuddy.meta.id]: workbuddy,
   [zcode.meta.id]: zcode,
+  [codex.meta.id]: codex,
 }
 
 export const ADAPTER_LIST = Object.values(ADAPTERS).map((a) => a.meta)

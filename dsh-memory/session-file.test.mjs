@@ -63,3 +63,22 @@ test('小文件与坏文件不阻塞', () => {
   assert.doesNotThrow(() => listSessions(root, CWD))
   assert.equal(readSessionFile(path.join(dir, 'session.jsonl.zstd')), null)
 })
+
+test('短会话中的真实消息也会被发现', () => {
+  const dir = writeSession('short-valid')
+  const header = { type: 'session', id: 'session-short-valid', cwd: CWD, createdAt: 1000 }
+  const event = { type: 'user/message', seq: 1, time: 1001, data: { content: [{ type: 'text', text: '短记忆' }] } }
+  const file = path.join(dir, 'session.jsonl.zstd')
+  fs.writeFileSync(file, Buffer.concat([pack([header]), pack([event])]))
+  assert.ok(fs.statSync(file).size < 512)
+  assert.deepEqual(listSessions(root, CWD).find((session) => session.id === header.id)?.events, [header, event])
+})
+
+test('截断的 v4 不阻断列表，仍可读取同一会话的旧文件', () => {
+  const dir = writeSession('fallback-valid')
+  const broken = pack([{ type: 'session' }]).subarray(0, 4)
+  fs.writeFileSync(path.join(dir, 'session.v4.jsonl.zstd'), broken)
+  assert.equal(readSessionFile(path.join(dir, 'session.v4.jsonl.zstd')), null)
+  assert.equal(listSessions(root, CWD).find((session) => session.id === 'session-fallback-valid')?.path,
+    path.join(dir, 'session.jsonl.zstd'))
+})

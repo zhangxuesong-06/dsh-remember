@@ -21,6 +21,7 @@ process.env.OPENCODE_MEM_HOME = ocRoot
 process.env.DSH_HOME = dshHome
 process.env.WORKBUDDY_MEM_HOME = wbRoot
 process.env.ZCODE_MEM_HOME = zcRoot
+process.env.CODEX_MEMORY_HOME = path.join(tmp, 'codex')
 
 const cross = await import('./recall.mjs')
 
@@ -66,7 +67,7 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 test('四个来源都能读，he/me/act/meta 归一化正确，工具行默认不收', () => {
   const { records, stores } = cross.loadAll()
-  assert.deepEqual(stores.map((s) => s.source), ['opencode', 'dsh', 'workbuddy', 'zcode'])
+  assert.deepEqual(stores.map((s) => s.source), ['opencode', 'dsh', 'workbuddy', 'zcode', 'codex'])
   assert.equal(stores.find((s) => s.source === 'dsh').workspaces, 1)
   const dsh = records.filter((r) => r.source === 'dsh')
   assert.equal(dsh.find((r) => r.who === 'user').line, 1)
@@ -178,10 +179,19 @@ test('库缺失和坏行不阻塞其他库', () => {
   assert.ok(cross.recall('缓存方案').length > 0)
 })
 
+test('坏行与空行之后仍用物理行号引用原文', () => {
+  const stream = path.join(ocRoot, 'stream.jsonl')
+  const text = '合成证据原话'
+  fs.writeFileSync(stream, `\n坏行\n${JSON.stringify({ who: 'user', text })}\n`)
+  const [hit] = cross.trace(text)
+  assert.equal(cross.refOf(hit), 'opencode:3')
+  assert.equal(cross.readAt('opencode', 3).text, text)
+})
+
 test('缺失的库也会出现在 sources 里', () => {
   fs.rmSync(dshHome, { recursive: true, force: true })
   const list = cross.sources()
-  assert.equal(list.length, 4)
+  assert.equal(list.length, 5)
   assert.equal(list.find((s) => s.source === 'dsh').exists, false)
 })
 
@@ -199,17 +209,23 @@ test('共享仓库布局：一个根目录多条流', () => {
   writeJsonl(path.join(repo, 'zcode', 'stream.jsonl'), [
     { who: 'me', type: 'assistant/message', ws: 'c:\\work\\记忆', sid: 's-zc', ts: NOW - 500, text: '共享仓库标记 在 ZCode 里。' },
   ])
+  writeJsonl(path.join(repo, 'codex', 'stream.jsonl'), [
+    { who: 'assistant', type: 'assistant/message', sid: 's-codex', ts: NOW - 3000, text: '共享仓库标记 在 Codex 里。' },
+  ])
   const prev = process.env.AGENT_MEMORY_HOME
+  const previousCodex = process.env.CODEX_MEMORY_HOME
   process.env.AGENT_MEMORY_HOME = repo
+  delete process.env.CODEX_MEMORY_HOME
   try {
     const list = cross.sources()
-    assert.equal(list.length, 4)
+    assert.equal(list.length, 5)
     assert.ok(list.every((s) => s.exists))
     assert.ok(list.find((s) => s.source === 'opencode').path.startsWith(repo))
     const hits = cross.recall('共享仓库标记')
-    assert.equal(hits.length, 4)
+    assert.equal(hits.length, 5)
     assert.equal(hits[0].source, 'dsh')
   } finally {
+    process.env.CODEX_MEMORY_HOME = previousCodex
     if (prev === undefined) delete process.env.AGENT_MEMORY_HOME
     else process.env.AGENT_MEMORY_HOME = prev
   }

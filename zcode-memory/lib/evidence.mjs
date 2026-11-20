@@ -76,17 +76,19 @@ export function createIntegrity(root, names = ['stream.jsonl', 'marks.jsonl']) {
     const status = problems.length ? 'BAD' : pending ? (untracked ? 'UNTRACKED' : 'PENDING') : 'OK'
     return { ok: status === 'OK', status, pending, untracked, files, problems }
   }
+  const accept = (state, name) => {
+    const previous = state.files[name]
+    const data = inspect(name, previous)
+    if (data.problems.length) throw new Error(`Integrity failure in ${name}: ${data.problems[0].reason}`)
+    if (data.partial) throw new Error(`Incomplete tail in ${name}; wait for the writer to finish`)
+    if (data.bytes.length || previous) {
+      state.files[name] = { bytes: data.bytes.length, sha256: sha256(data.bytes), records: data.rows.length,
+        baselineAt: previous?.baselineAt || new Date().toISOString() }
+    }
+  }
   const sync = () => {
     const state = read()
-    for (const name of names) {
-      const d = inspect(name, state.files[name])
-      if (d.problems.length) throw new Error(`Integrity failure in ${name}: ${d.problems[0].reason}`)
-      if (d.partial) throw new Error(`Incomplete tail in ${name}; wait for the writer to finish`)
-      if (d.bytes.length || state.files[name]) {
-        state.files[name] = { bytes: d.bytes.length, sha256: sha256(d.bytes), records: d.rows.length,
-          baselineAt: state.files[name]?.baselineAt || new Date().toISOString() }
-      }
-    }
+    for (const name of names) accept(state, name)
     atomicWrite(checkpoint, state)
     return verify()
   }
@@ -94,12 +96,7 @@ export function createIntegrity(root, names = ['stream.jsonl', 'marks.jsonl']) {
   const record = (name) => {
     if (!names.includes(name)) throw new Error('Unknown integrity file')
     const state = read()
-    const file = path.join(root, name)
-    const data = scan(file)
-    // 另一个进程可能正在写最后一行；不要把半行接纳成基线。
-    if (data.errors.length || data.partial) throw new Error('Journal has an incomplete or invalid tail; run verify')
-    state.files[name] = { bytes: data.bytes.length, sha256: sha256(data.bytes), records: data.rows.length,
-      baselineAt: state.files[name]?.baselineAt || new Date().toISOString() }
+    accept(state, name)
     atomicWrite(checkpoint, state)
   }
   return { root, names, verify, sync, record }
@@ -130,13 +127,14 @@ export function readBlob(root, hash) {
   return bytes
 }
 
-export function snapshot(root, file, maxBytes = 8 * 1024 * 1024) {
+export function snapshot(root, file, maxBytes = 8 * 1024 * 1024, { dryRun = false } = {}) {
   try {
     const stat = fs.statSync(file)
     if (!stat.isFile()) return { path: file, state: 'not-file' }
     if (stat.size > maxBytes) return { path: file, state: 'oversize', bytes: stat.size, limit: maxBytes }
     const bytes = fs.readFileSync(file)
-    return { path: file, state: 'saved', ...putBlob(root, bytes) }
+    const evidence = dryRun ? { sha256: sha256(bytes), bytes: bytes.length } : putBlob(root, bytes)
+    return { path: file, state: 'saved', ...evidence }
   } catch (error) {
     return { path: file, state: error.code === 'ENOENT' ? 'missing' : 'unreadable', error: error.code || error.message }
   }

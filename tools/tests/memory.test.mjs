@@ -46,6 +46,28 @@ test('同一消息的 observed/final 同文只留一条；recall 视图去重', 
   assert.equal(hits.filter((h) => h.text.includes('重复视图测试内容')).length, 1)
 })
 
+test('空的规范会话快照不会阻止后续补记可见正文', () => {
+  const capture = createCapture(core, root)
+  const user = { id: 'u', type: 'user', text: '' }
+  const assistant = { id: 'a', type: 'assistant', time: { created: 1 }, content: [] }
+  capture.messages('s', [user, assistant])
+  capture.messages('s', [
+    { ...user, text: '合成问题' },
+    { ...assistant, content: [{ type: 'text', text: '中断前已显示的回答' }] },
+  ])
+  assert.deepEqual(core.readAll().map((row) => [row.text, row.turnID]), [
+    ['合成问题', 'u'], ['中断前已显示的回答', 'u'],
+  ])
+})
+
+test('仅空白变化的最终回答保留原有排版和原文', () => {
+  const capture = createCapture(core, root)
+  capture.assistant('s', 'a', 0, 'result value', 1, 'u', 'observed')
+  const final = capture.assistant('s', 'a', 0, 'result\n    value', 2, 'u', 'completed')
+  assert.equal(core.getRecord(final.seq).text, 'result\n    value')
+  assert.equal(final.completion, 'completed')
+})
+
 test('默认回忆不把 episode 摘要排到原话前面', () => {
   core.append({ who: 'assistant', kind: 'message', text: '缓存方案用本地文件，这是当时的原话。' })
   core.append({ who: 'system', kind: 'episode', text: '任务摘录：缓存方案用本地文件。' })

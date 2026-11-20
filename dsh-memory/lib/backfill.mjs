@@ -6,9 +6,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DSH_HOME, SESSIONS_DIR } from './config.mjs'
-import { listSessions, listSubagentSessions } from './session-file.mjs'
+import { listWorkspaceSessions } from './session-file.mjs'
 import { eventToRecords, eventKey } from './capture.mjs'
-import { filterSubagentRecords } from './subagent.mjs'
+import { filterSubagentRecords, isSubagent } from './subagent.mjs'
 
 export function archivedSessionIds() {
   const set = new Set()
@@ -25,74 +25,43 @@ export function archivedSessionIds() {
 
 export function backfill(ledger, cwd, cfg = {}, allow = null) {
   const skip = cfg.includeArchived ? new Set() : archivedSessionIds()
-  let sessions = []
-  try { sessions = listSessions(SESSIONS_DIR, cwd) } catch { return { added: 0, sessions: 0 } }
-
-  // 已经在流里的记录，不要再倒一遍。
-  // 光靠 seqs 不够——两个实例各记各的序号，谁最后保存就把别人的那几行抹掉；
-  // 抹掉之后下一轮回填就会把旧会话整段重倒。这里按「同一份会话、同一毫秒、同一个人、同样的开头」
-  // 认作同一个事件，重复的直接跳过。这比 seqs 稳，而且不依赖任何一方记得住。
-  const seen = new Set()
-  for (const d of ledger.docs) {
-    if (!d) continue
-    seen.add(`${d.sid || ''}|${d.ts || 0}|${d.who || ''}|${String(d.text || '').slice(0, 40)}`)
+  const sessions = listWorkspaceSessions(SESSIONS_DIR, cwd)
+  const fingerprint = (sid, record) => JSON.stringify([sid, record.ts, record.who, String(record.text || '').slice(0, 40)])
+  const legacyRecords = new Set()
+  const seenTask = new Set()
+  for (const record of ledger.docs) {
+    if (!record) continue
+    if (!record.eventKey || String(record.eventKey).startsWith(':')) legacyRecords.add(fingerprint(record.sid, record))
+    if (record.type === 'subagent/task') seenTask.add(record.sid)
   }
 
   let added = 0
   let used = 0
-  for (const s of sessions) {
-    if (skip.has(s.id)) continue
-    // 多线文件夹：只倒属于这条线的会话。没登记的，哪怕就在同一个文件夹里，也不碰。
-    if (typeof allow === 'function' && !allow(s.id)) continue
-    used += 1
-    for (const ev of s.events) {
-      const key = eventKey(ev)
-      if (key !== null && ledger.seenSeq(s.id, key)) continue
-      const recs = eventToRecords(ev)
-      for (const r of recs) {
-        // 回填不做内容去重（间隔久的两句同样的话是真的说了两遍）；
-        // 但同一条事件被倒第二遍要挡住，否则换文件 / 两个实例之后就会重影。
-        const fp = `${s.id}|${r.ts || 0}|${r.who || ''}|${String(r.text || '').slice(0, 40)}`
-        if (seen.has(fp)) continue
-        seen.add(fp)
-        ledger.append({ ...r, sid: s.id }, { dedupe: false })
-        added += 1
-      }
-      if (key !== null) ledger.noteSeq(s.id, key)
-    }
-  }
-
-  // ——— 子代理 ———
-  // 只补证据链：任务提示（who=meta）、tool/call、tool/result、artifact。
-  // 子代理的 user/assistant 对话是模型之间的话，不写进「他说的/我说的」。
   let subagents = 0
   let subagentAdded = 0
-  if (cfg.backfillSubagents !== false) {
-    let subs = []
-    try { subs = listSubagentSessions(SESSIONS_DIR, cwd) } catch {}
-    const seenTask = new Set()
-    for (const s of subs) {
-      if (skip.has(s.id)) continue
-      // 多线文件夹：按父会话归属判断；父会话没登记就不碰。
-      if (typeof allow === 'function' && !allow(s.header.parentSession || s.id)) continue
-      subagents += 1
-      const pending = new Map()
-      for (const ev of s.events) {
-        const key = eventKey(ev)
-        if (key !== null && ledger.seenSeq(s.id, key)) continue
-        const recs = filterSubagentRecords(
-          eventToRecords(ev, { sid: s.id, root: ledger.dir, cwd, pending }),
-          { sid: s.id, header: s.header, seenTask },
-        )
-        for (const r of recs) {
-          const fp = `${s.id}|${r.ts || 0}|${r.who || ''}|${String(r.text || '').slice(0, 40)}`
-          if (seen.has(fp)) continue
-          seen.add(fp)
-          ledger.append({ ...r, sid: s.id }, { dedupe: false })
-          subagentAdded += 1
-        }
-        if (key !== null) ledger.noteSeq(s.id, key)
+  for (const { id: sid, header, events } of sessions) {
+    const child = isSubagent(header)
+    const owner = child ? header.parentSession || sid : sid
+    if (child && cfg.backfillSubagents === false) continue
+    if (skip.has(sid) || skip.has(owner)) continue
+    if (typeof allow === 'function' && !allow(owner)) continue
+    if (child) subagents += 1
+    else used += 1
+    const context = child
+      ? { sid, root: ledger.dir, cwd, pending: new Map(), historical: true }
+      : { sid }
+    for (const event of events) {
+      const key = eventKey(event)
+      if (key !== null && ledger.seenSeq(sid, key)) continue
+      const records = eventToRecords(event, context)
+      const accepted = child ? filterSubagentRecords(records, { sid, header, seenTask }) : records
+      for (const record of accepted) {
+        if (legacyRecords.has(fingerprint(sid, record))) continue
+        if (ledger.append({ ...record, sid }, { dedupe: false }) === -1) continue
+        if (child) subagentAdded += 1
+        else added += 1
       }
+      if (key !== null) ledger.noteSeq(sid, key)
     }
   }
   if (added || subagentAdded) ledger.seal(true)

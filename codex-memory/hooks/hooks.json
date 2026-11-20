@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node \"$PLUGIN_ROOT/codex-memory/hook.mjs\"",
+        "commandWindows": "node \"$env:PLUGIN_ROOT/codex-memory/hook.mjs\"",
+        "timeout": 15
+      }]
+    }],
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node \"$PLUGIN_ROOT/codex-memory/hook.mjs\"",
+        "commandWindows": "node \"$env:PLUGIN_ROOT/codex-memory/hook.mjs\"",
+        "timeout": 15
+      }]
+    }]
+  }
+}

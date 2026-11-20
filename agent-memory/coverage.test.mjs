@@ -16,6 +16,7 @@ process.env.OPENCODE_MEM_HOME = ocRoot
 process.env.DSH_HOME = dshHome
 process.env.WORKBUDDY_MEM_HOME = wbRoot
 process.env.ZCODE_MEM_HOME = zcRoot
+process.env.CODEX_MEMORY_HOME = path.join(tmp, 'codex')
 
 const cov = await import('./coverage.mjs')
 
@@ -63,7 +64,7 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }))
 test('四个来源都按「用户轮有没有回答」统计', () => {
   const rows = cov.coverage()
   const by = new Map(rows.map((r) => [r.source, r]))
-  assert.deepEqual(rows.map((r) => r.source), ['opencode', 'dsh', 'workbuddy', 'zcode'])
+  assert.deepEqual(rows.map((r) => r.source), ['opencode', 'dsh', 'workbuddy', 'zcode', 'codex'])
   assert.equal(by.get('opencode').turns, 2)
   assert.equal(by.get('opencode').answered, 2)
   assert.equal(by.get('opencode').unanswered, 0)
@@ -105,6 +106,28 @@ test('缺失轮带可回读的引用行号', () => {
   assert.equal(zc.worst.length, 1)
   assert.equal(zc.worst[0].missing, 1)
   assert.equal(zc.worst[0].firstMissing.line, 7)
+})
+
+test('过滤时间与坏行后，缺失轮仍指向物理行号', () => {
+  fs.writeFileSync(path.join(ocRoot, 'stream.jsonl'), [
+    JSON.stringify({ who: 'user', kind: 'message', sid: 'old', ts: NOW - 6000 }),
+    '坏行',
+    '',
+    JSON.stringify({ who: 'user', kind: 'message', sid: 'recent', ts: NOW }),
+    '',
+  ].join('\n'))
+  const [recent] = cov.coverage({ source: 'opencode', since: NOW - 500 })
+  assert.equal(recent.worst[0].firstMissing.line, 4)
+})
+
+test('未回答计数不会被诊断明细的上限截断', () => {
+  writeJsonl(path.join(ocRoot, 'stream.jsonl'), Array.from({ length: 60 }, () => ({
+    kind: 'message', who: 'user', sid: 'synthetic', ts: NOW,
+  })))
+  const [store] = cov.coverage({ source: 'opencode' })
+  assert.equal(store.unanswered, 60)
+  assert.equal(store.silent, 60)
+  assert.equal(store.followup, 0)
 })
 
 test('format 输出表头与来源名', () => {

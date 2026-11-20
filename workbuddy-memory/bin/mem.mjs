@@ -22,13 +22,11 @@
 //   node mem.mjs hook                     ← 给 hook 用，stdin 吃 JSON
 // 参数：--ws <工作区子串>  --limit n  --full
 
-import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, renameSync, unlinkSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
-import { createHash } from 'node:crypto'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs, resolveRoot } from './mem-evidence.mjs'
+import { atomicWrite, createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs, resolveRoot } from './mem-evidence.mjs'
 import { buildIndex, appendIndex, searchIndex, indexStore, episodesByIds, indexBuiltAt, indexFresh } from './mem-index.mjs'
 
 // 库根走 mem-evidence.resolveRoot：hook、CLI、维护进程共用同一个判断。
@@ -764,9 +762,7 @@ function writePending(value) {
     for (const [k, v] of Object.entries(value)) {
       if (!v || !v.ts || now - v.ts > 6 * 3600e3) delete value[k]
     }
-    const tmp = PENDING + '.tmp'
-    writeFileSync(tmp, JSON.stringify(value), 'utf8')
-    renameSync(tmp, PENDING)
+    atomicWrite(PENDING, JSON.stringify(value))
   } catch (e) { diag('写 pending 失败：' + e.message) }
 }
 
@@ -784,7 +780,6 @@ const LIGHT_TOOLS = new Set([
 ])
 const LIGHT_BLOB_MAX = 256 * 1024
 const AGENT_TOOL = /^(task|agent|subagent|dispatch_agent|dispatchagent|task_agent|spawn_agent)$/
-const EXPERT_TOOL = /(expert|plugin|专家)/i
 
 const normTool = (name) => String(name || '').split(/[.:]/).pop().toLowerCase()
 const isLightTool = (name) => LIGHT_TOOLS.has(normTool(name))
@@ -794,6 +789,7 @@ const safeText = (v, max = 0) => {
   try { s = typeof v === 'string' ? v : JSON.stringify(v) } catch { s = String(v ?? '') }
   return max > 0 ? s.slice(0, max) : s
 }
+const toolKey = (name, args, callId) => callId || sha256(name + '\0' + safeText(args)).slice(0, 16)
 
 // 子智能体 / 专家信息：hook 负载和工具入参两处都可能有，谁都别漏。
 // 注意 harness 的负载里常带 agent_type=cli（会话本身的运行方式），那不是子智能体，
@@ -849,15 +845,13 @@ function recordToolCall(p, cwd, sid) {
   const callId = callIdOf(p)
   const args = argsOf(p)
   const meta = metaFrom(p, args, name)
-  const keyIdOf = (name, raw) => callId || sha256(name + '\0' + raw).slice(0, 16)
-  let raw = ''
-  try { raw = typeof args === 'string' ? args : JSON.stringify(args) } catch { raw = String(args) }
-  const keyId = keyIdOf(name, raw)
+  const raw = safeText(args)
+  const keyId = toolKey(name, raw, callId)
   const paths = artifactPaths(name, args, cwd)
   const before = paths.map((fp) => snapshot(ROOT, fp))
   const key = `${sid || ''}|${keyId}`
   const pending = readPending()
-  pending[key] = { paths, before, name, ts: Date.now() }
+  pending[key] = { paths, before, name, agent: meta.agent, expert: meta.expert, ts: Date.now() }
   writePending(pending)
   let evidence = null
   try { evidence = putBlob(ROOT, raw) } catch (e) { diag('证据写入失败：' + e.message) }
@@ -908,17 +902,15 @@ function recordToolResult(p, cwd, sid) {
   const callId = callIdOf(p)
   const args = argsOf(p)
   const meta = metaFrom(p, args, name)
-  let rawArgs = ''
-  try { rawArgs = typeof args === 'string' ? args : JSON.stringify(args) } catch { rawArgs = String(args) }
-  const keyId = callId || sha256(name + '\0' + rawArgs).slice(0, 16)
+  const keyId = toolKey(name, args, callId)
   const key = `${sid || ''}|${keyId}`
   const pending = readPending()
   const entry = pending[key]
-  if (entry) { delete pending[key]; writePending(pending) }
+  const agent = meta.agent || entry?.agent
+  const expert = meta.expert || entry?.expert
   const response = p.tool_response !== undefined ? p.tool_response
     : p.tool_result !== undefined ? p.tool_result : (p.error !== undefined ? p.error : '')
-  let text = ''
-  try { text = typeof response === 'string' ? response : JSON.stringify(response) } catch { text = String(response) }
+  const text = safeText(response)
   const isError = !!(p.is_error || p.error || (response && typeof response === 'object' && response.is_error))
   const paths = (entry && entry.paths) || artifactPaths(name, args, cwd)
   const files = paths.map((fp) => ({
@@ -939,66 +931,64 @@ function recordToolResult(p, cwd, sid) {
     : /^(write|edit|patch|multiedit|multi_edit|apply_patch|ops_replace)$/i.test(name) ? `我处理了 ${name}：结果已存为证据`
     : light ? (squeeze(flat, 140) || '(无输出)') + (evidence ? '' : `（结果 ${Math.max(1, Math.round(size / 1024))} KB，未存全文）`)
     : (squeeze(flat, 220) || '(无输出)')
-  append(cwd, {
+  const result = {
     who: 'act', sid, text: summary, tool: name, type: 'tool/result',
     callId, status: isError ? 'error' : 'completed', evidence, files, linked: !!entry,
     eventKey: `tool:${sid || ''}:${keyId}:result`,
-    ...(meta.agent ? { agent: meta.agent } : {}),
-    ...(meta.expert ? { expert: meta.expert } : {}),
+    agent, expert,
     source: { type: 'hook.post_tool', callId },
-  })
+  }
+  const saved = append(cwd, result)
+  if (saved === 0 && entry) { delete pending[key]; writePending(pending) }
 
   // 子智能体回来：结果全文存证据，附耗时与成败
   if (isAgentTool(name)) {
     const duration = entry && entry.ts ? Date.now() - entry.ts : null
     append(cwd, {
       who: 'act', sid, type: 'agent/end', tool: name, callId,
-      agent: meta.agent || null,
+      agent,
       status: isError ? 'error' : 'completed',
       durationMs: duration, evidence,
-      text: `${agentLabel(meta.agent)}结束：${isError ? '失败' : '完成'}${duration ? `，用时 ${(duration / 1000).toFixed(1)}s` : ''}；${squeeze(flat, 200) || '(无输出)'}`,
+      text: `${agentLabel(agent)}结束：${isError ? '失败' : '完成'}${duration ? `，用时 ${(duration / 1000).toFixed(1)}s` : ''}；${squeeze(flat, 200) || '(无输出)'}`,
       eventKey: `agent:${sid || ''}:${keyId}:end`,
       source: { type: 'hook.post_tool', callId },
     })
   }
-  if (!isError) {
-    for (const file of files) {
-      const { before, after } = file
-      if (before && before.state === 'saved' && after.state === 'saved' && before.sha256 === after.sha256) continue
-      if (after.state !== 'saved' && !(after.state === 'missing' && before && before.state === 'saved')) continue
-      append(cwd, {
-        who: 'act', sid, ws: wsOf(cwd), text: `${after.state === 'missing' ? '删除' : '写入'} ${file.path}；工具 ${name} 已完成；版本 ${after.sha256 || 'missing'}`,
-        tool: name, type: 'artifact', artifact: true, path: file.path, versions: file,
-        eventKey: `tool:${sid || ''}:${keyId}:artifact:${file.path}`,
-        source: { type: 'hook.observation', callId },
-      })
-    }
-  }
+  if (saved === 0) projectArtifacts(cwd, result)
 }
 
-function replayArtifacts(store) {
-  const keys = new Set(store.records.filter(Boolean).map((r) => r.eventKey).filter(Boolean))
+function projectArtifacts(cwd, result, existingKeys = null) {
+  if (!result.eventKey || result.status === 'error' || !Array.isArray(result.files)) return 0
+  const prefix = result.eventKey.replace(/:result$/, '')
   let added = 0
-  for (const r of store.records) {
-    if (!r || r.type !== 'tool/result' || r.status === 'error' || !Array.isArray(r.files)) continue
-    for (const file of r.files) {
-      const key = `${r.eventKey}:artifact:${file.path}`
-      if (keys.has(key)) continue
-      const before = file.before || { state: 'unknown' }
-      const after = file.after || { state: 'unknown' }
-      if (before.state === 'saved' && after.state === 'saved' && before.sha256 === after.sha256) continue
-      if (after.state !== 'saved' && !(after.state === 'missing' && before.state === 'saved')) continue
-      const ok = append(process.cwd(), {
-        who: 'act', sid: r.sid, ws: r.ws, text: `${after.state === 'missing' ? '删除' : '写入'} ${file.path}；工具 ${r.tool} 已完成；版本 ${after.sha256 || 'missing'}`,
-        tool: r.tool, type: 'artifact', artifact: true, path: file.path, versions: file,
-        eventKey: key, source: { type: 'hook.observation', callId: r.callId, replayed: true },
-      })
-      if (ok === 0) { added += 1; keys.add(key) }
+  for (const file of result.files) {
+    const key = `${prefix}:artifact:${file.path}`
+    if (existingKeys?.has(key) || existingKeys?.has(`${result.eventKey}:artifact:${file.path}`)) continue
+    const before = file.before || { state: 'unknown' }
+    const after = file.after || { state: 'unknown' }
+    if (before.state === 'saved' && after.state === 'saved' && before.sha256 === after.sha256) continue
+    if (after.state !== 'saved' && !(after.state === 'missing' && before.state === 'saved')) continue
+    const saved = append(cwd, {
+      who: 'act', sid: result.sid, ws: result.ws, text: `${after.state === 'missing' ? '删除' : '写入'} ${file.path}；工具 ${result.tool} 已完成；版本 ${after.sha256 || 'missing'}`,
+      tool: result.tool, type: 'artifact', artifact: true, path: file.path, versions: file,
+      eventKey: key, source: { type: 'hook.observation', callId: result.callId, ...(existingKeys ? { replayed: true } : {}) },
+    })
+    if (saved === 0) {
+      added += 1
+      existingKeys?.add(key)
     }
   }
   return added
 }
 
+function replayArtifacts(store) {
+  const keys = new Set(store.records.filter(Boolean).map((r) => r.eventKey).filter(Boolean))
+  let added = 0
+  for (const result of store.records) {
+    if (result?.type === 'tool/result') added += projectArtifacts(process.cwd(), result, keys)
+  }
+  return added
+}
 function writeOut(obj) {
   try { process.stdout.write(JSON.stringify(obj)) } catch {}
 }

@@ -36,12 +36,12 @@ export function fields(payload, now = Date.now()) {
   }
 }
 
-function clip(s, n) {
+export function clip(s, n) {
   const text = String(s ?? '').replace(/\s+/g, ' ').trim()
   return text.length <= n ? text : text.slice(0, n) + '…'
 }
 
-function stringify(value) {
+export function stringify(value) {
   if (typeof value === 'string') return value
   try { return JSON.stringify(value) } catch { return String(value) }
 }

@@ -44,9 +44,9 @@ node zcode-memory/bin/cli.mjs backfill
 node zcode-memory/bin/cli.mjs backfill --session sess_xxx --since 7d
 ```
 
-回填按「用户消息 → 下一条用户消息」的时间窗取该轮最后一条 assistant 正文，`eventKey` 与正文
-哈希双重去重，重复执行不增行；来源标 `db.backfill`，`verify` 仍按原账本校验。找不到正文的轮
-只计数，不猜。
+回填按「用户消息 → 下一条用户消息」的时间窗取该轮最后一条 assistant 正文。按会话和轮次核对
+已捕获的回答，回填与 Stop 共用 `eventKey`。不同轮出现相同回答时，各自保留出处。回填来源标
+`db.backfill`，找不到正文的轮只计数。
 
 子代理的证据链单独补：
 
@@ -57,7 +57,8 @@ node zcode-memory/bin/cli.mjs backfill --subagents
 
 只读 `session.task_type='subagent_child'`：任务提示标成 `who:meta` / `type:subagent/task`，
 然后补 `tool/call`、`tool/result` 和 `artifact`。**不写子代理与主模型之间的对话**，避免把
-模型提示当成用户原话。产物只能拿当前快照，`versions.before` 明确标 `unknown`。
+模型提示当成用户原话。运行中的工具先记调用，后续回填再补已完成或已失败的结果。产物只能拿
+当前快照，`versions.before` 明确标 `unknown`。`--dry-run` 只试算补写数量，流与 blob 目录保持原样。
 
 ## 维护
 

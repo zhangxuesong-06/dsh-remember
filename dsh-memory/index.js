@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { Ledger } from './lib/store.mjs'
 import {
-  loadCfg, workspaceDir, sameWorkspace, diag, SESSIONS_DIR, CFG_PATH,
+  loadCfg, workspaceDir, workspaceLine, diag, SESSIONS_DIR, CFG_PATH,
 } from './lib/config.mjs'
 import { eventToRecords, setCaptureLog, setCaptureHuman } from './lib/capture.mjs'
 import { backfill } from './lib/backfill.mjs'
@@ -126,32 +126,14 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
   // 所以：文件夹在 config.lines 里出现过 → 这个文件夹**只认名单**，
   // 名单外的会话一律不写、不注入。宁可它没记忆，也不要它记得别人的事。
   function lineOf(cwd, sid) {
-    if (!cfg.enabled || !cwd) return undefined
-    const lines = (cfg.lines || []).filter((l) => l && sameWorkspace(l.cwd, cwd))
-    if (!lines.length) {
-      if (!(cfg.workspaces || []).some((w) => sameWorkspace(w, cwd))) return undefined
-      return { cwd, name: null }
-    }
-    for (const l of lines) {
-      const name = l.name || 'line'
-      if (l.root && l.root === sid) return { cwd, name }
-      if (Array.isArray(l.members) && l.members.includes(sid)) return { cwd, name }
-    }
-    // 只登记了一条线、而且这条线写了 autoJoin: true——新会话默认就是它的。
-    // 不加这条，每开一次对话都得手动往 members 里加人；没人会加，新会话就全成了没记忆的哑巴。
-    // 代价是这条保护在「一只」的时候是松的：另一只搬进来那天，把 autoJoin 删掉、给她也开一条线，
-    // 没登记的自然就被下面这行按住。
-    if (lines.length === 1 && lines[0].autoJoin === true) {
-      return { cwd, name: lines[0].name || 'line' }
-    }
-    return false // 这个文件夹多线，但这个会话没登记
+    return workspaceLine(cfg, cwd, sid)
   }
 
   function ledgerFor(line) {
-    const key = String(line.cwd).toLowerCase() + '|' + (line.name || '')
+    const key = workspaceDir(line.cwd, line.name)
     let l = ledgers.get(key)
     if (l) return l
-    l = new Ledger(workspaceDir(line.cwd, line.name), { meetingGapMs: cfg.meetingGapMs }).open()
+    l = new Ledger(key, { meetingGapMs: cfg.meetingGapMs }).open()
     ledgers.set(key, l)
     return l
   }
@@ -187,7 +169,9 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
         const header = session && session.header
         const cwd = header && header.cwd
         const sid = session && session.id
-        const line = lineOf(cwd, sid)
+        if (!sid) return
+        const child = isSubagent(header)
+        const line = lineOf(cwd, child ? header.parentSession || sid : sid)
         if (line === undefined) return
         if (line === false) { holdNotice(sid, cwd); return }
         const l = ledgerFor(line)
@@ -197,7 +181,7 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
         // 否则同一条线开个新会话，同一批消息会在同一个库里再记一遍。
         const recs = eventToRecords(event, { sid, line: line && line.name, root: l.dir, cwd, pending: pendingFor(l) })
         // 子代理：只留任务提示(meta) + 工具/产物，不把模型之间的对话写成「他说的/我说的」。
-        const use = isSubagent(header)
+        const use = child
           ? filterSubagentRecords(recs, { sid, header, seenTask: subagentTasks })
           : recs
         for (const r of use) l.append({ ...r, sid })
@@ -232,7 +216,7 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
     const sid = session.id
     if (mounted.has(sid)) return
     const header = session.header
-    if ((header.delegationDepth || 0) > 0 || header.origin === 'subagent') { mounted.add(sid); return }
+    if (isSubagent(header)) { mounted.add(sid); return }
     const cwd = header.cwd
     const line = lineOf(cwd, sid)
     if (line === undefined) return
@@ -249,10 +233,7 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
     const doBackfill = () => {
         try {
           // 多线文件夹只倒自己那条线的成员；单线文件夹整folder倒
-          const allow = line.name
-            ? (id) => (cfg.lines || []).some((x) => sameWorkspace(x.cwd, cwd)
-              && (x.root === id || (x.members || []).includes(id)))
-            : null
+          const allow = (id) => lineOf(cwd, id)?.name === line.name
           const r = backfill(l, cwd, cfg, allow)
           diag(`回填 ${sid}：${r.sessions} 份会话，${r.added} 条`)
         } catch (e) { diag('回填失败：' + (e && e.message)) }

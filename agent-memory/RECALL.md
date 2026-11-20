@@ -6,7 +6,7 @@
 
 - 只读：`readFileSync` / `statSync` / `readdirSync`，不建目录、不拿锁、不写缓存；
 - 不 import `mem-core` / `mem-journal`；分词来自独立的 `mem-tokenize.mjs`；
-- 每个库各自仍是唯一真相，结果只标 `opencode` / `dsh` / `workbuddy` / `zcode`；
+- 每个库各自仍是唯一真相，结果只标 `opencode` / `dsh` / `workbuddy` / `zcode` / `codex`；
 - 不自动注入到每次对话，按需调用。
 
 ## 数据源
@@ -20,6 +20,7 @@
   dsh/<工作区>/stream.jsonl
   workbuddy/stream.jsonl
   zcode/stream.jsonl
+  codex/stream.jsonl
 ```
 
 迁移前或显式设置环境变量时，回退到旧布局：
@@ -30,13 +31,14 @@
 | DSH | `~/.agent-memory/dsh/<工作区>/stream.jsonl` | `DSH_HOME/dsh-memory/<工作区>/stream.jsonl` |
 | WorkBuddy | `~/.agent-memory/workbuddy/stream.jsonl` | `WORKBUDDY_MEM_HOME` 或 `~/.workbuddy/mem/stream.jsonl` |
 | ZCode | `~/.agent-memory/zcode/stream.jsonl` | `ZCODE_MEM_HOME` 或 `~/.zcode/memory/stream.jsonl` |
+| Codex | `~/.agent-memory/codex/stream.jsonl` | `CODEX_MEMORY_HOME` |
 
 DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收对话、笔记、决策、段落、产物；工具行用 `--with-tools` 显式打开。
 
 ## 捕获完整性
 
 ```bash
-node agent-memory/coverage.mjs                 # 四端一张表
+node agent-memory/coverage.mjs                 # 五端一张表
 node agent-memory/coverage.mjs --source zcode
 node agent-memory/coverage.mjs --since 7d
 node agent-memory/coverage.mjs --worst         # 列出缺得最多的会话和引用行号

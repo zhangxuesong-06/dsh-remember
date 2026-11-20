@@ -19,8 +19,9 @@
 //   node cli.mjs lines   [add <线名> <工作区> <会话id> | join <线名> <会话id>]
 
 import { Ledger } from './lib/store.mjs'
-import { workspaceDir, loadCfg, DEFAULT_CFG, saveCfg } from './lib/config.mjs'
+import { workspaceDir, workspaceLine, loadCfg, saveCfg } from './lib/config.mjs'
 import { backfill } from './lib/backfill.mjs'
+import { setCaptureHuman } from './lib/capture.mjs'
 import { anchorBlock, primingBlock, recallBlock, traceBlock, arrivalBlock, dayOf } from './lib/assemble.mjs'
 import { search, priming } from './lib/retrieve.mjs'
 import { readBlob } from './lib/evidence.mjs'
@@ -31,7 +32,7 @@ if (!cmd || !cwd) {
   process.exit(1)
 }
 
-const cfg = { ...DEFAULT_CFG, ...loadCfg(), workspaces: [cwd] }
+const cfg = { ...loadCfg(), workspaces: [cwd] }
 // 多线文件夹：用 HIPPO_LINE=<线名> 指定看哪条
 const lineName = process.env.HIPPO_LINE || null
 const dir = workspaceDir(cwd, lineName)
@@ -107,8 +108,9 @@ switch (cmd) {
   }
 
   case 'backfill': {
-    const r = backfill(ledger, cwd, cfg)
-    ledger.seal(true)
+    setCaptureHuman(cfg.humanName)
+    const routeConfig = { ...cfg, enabled: true }
+    const r = backfill(ledger, cwd, cfg, (id) => workspaceLine(routeConfig, cwd, id)?.name === lineName)
     console.log(`回填：${r.sessions} 份会话，${r.added} 条记录；子代理 ${r.subagents || 0} 份，${r.subagentAdded || 0} 条证据`)
     console.log(`现在：${ledger.episodes.length} 段，${ledger.stats().traces} 句原话`)
     break

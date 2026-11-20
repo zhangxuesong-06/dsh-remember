@@ -1,7 +1,7 @@
 // WorkBuddy 适配器自测：只碰临时目录，不读不写真实记忆库。
 // 覆盖：工具证据配对、轻工具截断、子智能体、专家引用、维护/快照、清理不误删。
 // 输出 ASCII PASS/FAIL，方便在 GBK 控制台看。
-import { mkdtempSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -58,6 +58,15 @@ try {
   check('子智能体提示原文存证据', !!(start && start.evidence && /^[a-f0-9]{64}$/.test(start.evidence.sha256)))
   check('子智能体完成被记录', !!end && end.status === 'completed' && Number.isFinite(end.durationMs), JSON.stringify(end && end.status))
   check('子智能体结果存证据', !!(end && end.evidence && /^[a-f0-9]{64}$/.test(end.evidence.sha256)))
+  check('PostToolUse 未重复提供参数时，子智能体身份沿用调用证据', end?.agent?.type === 'explore')
+
+  const artifact = join(root, 'generated.txt')
+  hook({ ...base, hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'write', tool_input: { file_path: artifact } })
+  writeFileSync(artifact, 'synthetic artifact', 'utf8')
+  hook({ ...base, hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'write', tool_response: 'saved' })
+  check('实时捕获一条产物', byType('artifact').filter((row) => row.path === artifact).length === 1)
+  cli(['replay'])
+  check('重放不为同一产物再造索引', byType('artifact').filter((row) => row.path === artifact).length === 1)
 
   // 3. 专家 / 专家团队
   hook({ ...base, hook_event_name: 'PreToolUse', tool_name: 'search_plugins', tool_use_id: 'c3', tool_input: { type: 'expert', query: '投资' } })

@@ -9,18 +9,19 @@ const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 const FILES = ['stream.jsonl', 'tools.jsonl', 'episodes.jsonl', 'marks.jsonl']
 
 export function scanFile(file) {
-  if (!fs.existsSync(file)) return { bytes: Buffer.alloc(0), rows: [], errors: [] }
+  if (!fs.existsSync(file)) return { bytes: Buffer.alloc(0), rows: [], errors: [], lineNumbers: [] }
   const bytes = fs.readFileSync(file)
-  const rows = [], errors = []
+  const rows = [], errors = [], lineNumbers = []
   bytes.toString('utf8').replace(/^\uFEFF/, '').split(/\r?\n/).forEach((line, i) => {
     if (!line.trim()) return
     try {
       const row = JSON.parse(line)
       if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('not a record')
       rows.push(row)
+      lineNumbers.push(i + 1)
     } catch { errors.push({ line: i + 1, reason: 'invalid JSON record' }) }
   })
-  return { bytes, rows, errors }
+  return { bytes, rows, errors, lineNumbers }
 }
 
 export function createJournal(root) {

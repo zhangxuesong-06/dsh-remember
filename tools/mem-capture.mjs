@@ -14,7 +14,7 @@ export function createCapture(core, ws) {
   const lastUserBySid = new Map()
   const rememberAssistant = (sid, messageID, text, row) => {
     const slot = `${sid || ''}|${messageID || ''}`
-    const key = String(text || '').replace(/\s+/g, ' ').trim()
+    const key = String(text || '')
     let m = assistantSeen.get(slot)
     if (!m) { m = new Map(); assistantSeen.set(slot, m) }
     if (row) m.set(key, row)
@@ -77,21 +77,23 @@ export function createCapture(core, ws) {
   }
   function messages(sid, list) {
     let turnID = ''
-    const seen = new Set()
     for (const m of list || []) {
       if (m.type === 'user') {
         turnID = m.id
         const key = m.id ? `u:${sid}|${m.id}` : null
-        if (key && (processedMessages.has(key) || seen.has(key))) continue
-        user(sid, m.id, m.text, m.time?.created)
-        if (key) { processedMessages.add(key); seen.add(key) }
+        if (key && processedMessages.has(key)) continue
+        if (user(sid, m.id, m.text, m.time?.created) && key) processedMessages.add(key)
       } else if (m.type === 'assistant') {
-        const key = m.id ? `a:${sid}|${m.id}|${m.time?.completed ? 'c' : 's'}` : null
-        if (key && (processedMessages.has(key) || seen.has(key))) continue
+        const completed = !!m.time?.completed
+        const key = m.id && completed ? `a:${sid}|${m.id}` : null
+        if (key && processedMessages.has(key)) continue
+        let captured = false
         for (const [ordinal, part] of (m.content || []).entries()) {
-          if (part.type === 'text') assistant(sid, m.id, ordinal, part.text, m.time?.created, turnID || latestTurn(sid), m.time?.completed ? 'completed' : 'observed')
+          if (part.type !== 'text') continue
+          const row = assistant(sid, m.id, ordinal, part.text, m.time?.created, turnID || latestTurn(sid), completed ? 'completed' : 'observed')
+          if (row) captured = true
         }
-        if (key) { processedMessages.add(key); seen.add(key) }
+        if (key && captured) processedMessages.add(key)
       }
     }
   }
@@ -150,10 +152,11 @@ export function createCapture(core, ws) {
   function finish(sid, status = 'completed', turnID = latestTurn(sid)) {
     if (status === 'succeeded') status = 'completed'
     if (!turnID) return null
-    const docs = readAll().filter((r) => r.sid === sid && r.turnID === turnID && r.kind !== 'episode')
+    const rows = readAll()
+    const docs = rows.filter((r) => r.sid === sid && r.turnID === turnID && r.kind !== 'episode')
     const calls = readTools().filter((r) => r.sid === sid && r.turnID === turnID)
     const results = calls.filter((r) => r.phase === 'completed' || r.phase === 'error')
-    const request = docs.find((r) => r.who === 'user') || readAll().find((r) => r.sid === sid && r.who === 'user'
+    const request = docs.find((r) => r.who === 'user') || rows.find((r) => r.sid === sid && r.who === 'user'
       && (r.messageID === turnID || r.id === turnID || 'legacy:' + r.seq === turnID))
     const answers = docs.filter((r) => r.who === 'assistant' && r.kind === 'message')
     const artifacts = docs.filter((r) => r.kind === 'artifact')

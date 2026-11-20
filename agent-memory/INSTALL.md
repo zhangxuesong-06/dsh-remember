@@ -17,7 +17,7 @@ node agent-memory/install.mjs --dry-run --json
 3. `candidates` 为空 → 没发现 DSH / OpenCode / WorkBuddy / ZCode。问用户实际用的是哪个，或确认路径。
 4. 只有一个候选但 `installed === false` → 说明软件在，但记忆没装过；可以装，但先确认用户要装的是这个。
 
-## 1. 四个 adapter
+## 1. 五个 adapter
 
 | harness | 识别标记 | 安装命令 | 生效方式 |
 |---|---|---|---|
@@ -25,6 +25,7 @@ node agent-memory/install.mjs --dry-run --json
 | `opencode` | `~/.config/opencode/opencode.json`、`~/.opencode-mem/` | `node agent-memory/install.mjs --harness opencode` | 配置热加载；必要时 `/reload` |
 | `workbuddy` | `~/.workbuddy/settings.json`、`~/.workbuddy/skills/self-memory/` | `node agent-memory/install.mjs --harness workbuddy` | 重开 WorkBuddy |
 | `zcode` | `~/.zcode/cli/config.json`、`~/.agent-memory/zcode/` | `node agent-memory/install.mjs --harness zcode` | 生成 hx-local 市场并在插件市场里安装 `zcode-memory`，重启 ZCode |
+| `codex` | `~/.codex/config.toml`（或 `CODEX_HOME`） | `node agent-memory/install.mjs --harness codex` | 安装本地 `codex-memory`，然后在 Codex 审阅钩子 |
 
 `--dry-run` 只打印计划，不写文件。正式安装前先跑一次，确认 `adapter` 路径和动作对。
 
@@ -38,6 +39,7 @@ node agent-memory/install.mjs --dry-run --json
 | `opencode` | `session.hook` / `tool.transform` / `context.copy` |
 | `workbuddy` | `hook.stdin` / `hook.process` / `pending.file` |
 | `zcode` | `hook.stdin` / `hook.process` / `mcp.stdio` / `pending.file` |
+| `codex` | `hook.stdin` / `hook.process` / `skill` |
 
 ## 2. 安装时选择，运行时校验
 

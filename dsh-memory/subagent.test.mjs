@@ -1,5 +1,6 @@
 // 子代理口径：任务提示标 meta，对话丢弃，只留工具/产物证据。
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -10,6 +11,7 @@ import { isSubagent, filterSubagentRecords } from './lib/subagent.mjs'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-subagent-'))
 process.env.DSH_HOME = root
+process.env.DSH_MEMORY_HOME = path.join(root, 'dsh-memory')
 after(() => fs.rmSync(root, { recursive: true, force: true }))
 
 const CWD = 'D:\\ws'
@@ -75,5 +77,100 @@ test('回填子代理：只落证据链，重复执行不增行', async () => {
   assert.equal(rows.filter((r) => r.type === 'user/message' || r.type === 'assistant/message').length, 0)
   const second = backfill(ledger, CWD, cfg, null)
   assert.equal(second.subagentAdded, 0)
+  ledger.close()
+})
+
+test('两场主会话相同序号和同毫秒复用的输出都能回填，重复执行不增行', async () => {
+  const cwd = 'D:\\parent-workspace'
+  const { backfill } = await import('./lib/backfill.mjs')
+  const { Ledger } = await import('./lib/store.mjs')
+  for (const sid of ['parent-one', 'parent-two']) {
+    const dir = path.join(root, 'sessions', 'parents', sid)
+    fs.mkdirSync(dir, { recursive: true })
+    const header = { type: 'session', id: sid, cwd, createdAt: 1000 }
+    const events = ['result-one', 'result-two'].map((callId, index) => ({
+      type: 'tool/result', seq: index + 1, time: 1001,
+      data: { message: { toolCallId: callId, content: [{ type: 'text', text: 'same output' }] } },
+    }))
+    fs.writeFileSync(path.join(dir, 'session.v4.jsonl.zstd'),
+      pack([header, ...events, { type: 'padding', text: crypto.randomBytes(2048).toString('hex') }]))
+  }
+  const ledger = new Ledger(path.join(root, 'mem-parents')).open()
+  const cfg = { includeArchived: true }
+  assert.equal(backfill(ledger, cwd, cfg).added, 4)
+  assert.equal(backfill(ledger, cwd, cfg).added, 0)
+  assert.equal(ledger.rows().length, 4)
+  ledger.close()
+})
+
+test('离线回填使用配置的群聊名并只导入指定身份线', async () => {
+  const cwd = 'D:\\multi-workspace'
+  const configRoot = path.join(root, 'dsh-memory')
+  fs.mkdirSync(configRoot, { recursive: true })
+  fs.writeFileSync(path.join(configRoot, 'config.json'), JSON.stringify({
+    lines: [
+      { cwd, name: 'line-one', root: 'line-owned' },
+      { cwd, name: 'line-two', root: 'line-other' },
+    ],
+    humanName: 'configured-human',
+  }))
+  for (const sid of ['line-owned', 'line-other', 'line-unregistered']) {
+    const directory = path.join(root, 'sessions', 'multi', sid)
+    fs.mkdirSync(directory, { recursive: true })
+    fs.writeFileSync(path.join(directory, 'session.v4.jsonl.zstd'), pack([
+      { type: 'session', id: sid, cwd, createdAt: 1000 },
+      { type: 'user/message', seq: 1, time: 1001, data: {
+        source: { kind: 'relay', items: [{ id: sid, from: 'configured-human', text: sid }] },
+      } },
+    ]))
+  }
+  const result = spawnSync(process.execPath, ['dsh-memory/cli.mjs', 'backfill', cwd], {
+    cwd: new URL('..', import.meta.url), env: { ...process.env, HIPPO_LINE: 'line-one' }, encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const { workspaceDir } = await import('./lib/config.mjs')
+  const { Ledger } = await import('./lib/store.mjs')
+  const ledger = new Ledger(workspaceDir(cwd, 'line-one')).open()
+  assert.deepEqual(ledger.rows().map((row) => row.sid), ['line-owned'])
+  ledger.close()
+})
+
+test('事后回填保留当前文件快照，开始版本保留未知', async () => {
+  const { backfill } = await import('./lib/backfill.mjs')
+  const { readBlob } = await import('./lib/evidence.mjs')
+  const { Ledger } = await import('./lib/store.mjs')
+  const sid = 'child-artifact'
+  const target = path.join(root, 'current.txt')
+  fs.writeFileSync(target, 'current bytes')
+  const directory = path.join(root, 'sessions', 'working', sid)
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, 'session.v4.jsonl.zstd'), pack([
+    { type: 'session', id: sid, cwd: root, origin: 'subagent', parentSession: 'parent-artifact' },
+    { type: 'tool/call', seq: 1, time: 1001, data: { name: 'write', callId: 'write-one', arguments: { path: target } } },
+    { type: 'tool/result', seq: 2, time: 1002, data: { message: { toolCallId: 'write-one', content: [{ type: 'text', text: 'done' }] } } },
+  ]))
+  const ledger = new Ledger(path.join(root, 'mem-artifact')).open()
+  assert.equal(backfill(ledger, root, { includeArchived: true }).subagentAdded, 3)
+  const artifact = ledger.rows().find((row) => row.type === 'artifact')
+  assert.equal(artifact.versions.before.state, 'unknown')
+  assert.equal(readBlob(ledger.dir, artifact.versions.after.sha256).toString(), 'current bytes')
+  ledger.close()
+})
+
+test('早期无会话前缀的事件键继续参与旧记录去重', async () => {
+  const cwd = 'D:\\legacy-workspace'
+  const sid = 'legacy-parent'
+  const { backfill } = await import('./lib/backfill.mjs')
+  const { Ledger } = await import('./lib/store.mjs')
+  const directory = path.join(root, 'sessions', 'legacy', sid)
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, 'session.jsonl.zstd'), pack([
+    { type: 'session', id: sid, cwd, createdAt: 1000 },
+    { type: 'assistant/message', seq: 1, time: 1001, data: { message: { content: [{ type: 'text', text: 'legacy reply' }] } } },
+  ]))
+  const ledger = new Ledger(path.join(root, 'mem-legacy')).open()
+  ledger.append({ sid, who: 'me', type: 'assistant/message', ts: 1001, text: 'legacy reply', eventKey: ':1' })
+  assert.equal(backfill(ledger, cwd, { includeArchived: true }).added, 0)
+  assert.equal(ledger.rows().length, 1)
   ledger.close()
 })

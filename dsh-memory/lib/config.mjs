@@ -182,6 +182,22 @@ export function sameWorkspace(a, b) {
   return normPath(a) === normPath(b)
 }
 
+export function workspaceLine(cfg, cwd, sid) {
+  if (!cfg.enabled || !cwd || !sid) return undefined
+  const lines = (cfg.lines || []).filter((line) => line && sameWorkspace(line.cwd, cwd))
+  if (!lines.length) {
+    if (!(cfg.workspaces || []).some((workspace) => sameWorkspace(workspace, cwd))) return undefined
+    return { cwd, name: null }
+  }
+  for (const line of lines) {
+    if (line.root === sid || (Array.isArray(line.members) && line.members.includes(sid))) {
+      return { cwd, name: line.name || 'line' }
+    }
+  }
+  if (lines.length === 1 && lines[0].autoJoin === true) return { cwd, name: lines[0].name || 'line' }
+  return false
+}
+
 // 每个工作区（或每条线）一个库：目录名可读（用文件夹名/线名），后缀用路径哈希，避免同名撞车
 export function workspaceDir(cwd, lineName) {
   const full = normPath(cwd) + (lineName ? '::' + lineName : '')

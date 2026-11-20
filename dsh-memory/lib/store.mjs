@@ -131,6 +131,7 @@ export class Ledger {
 
   _scanStream() {
     this.docs = []
+    this._eventKeys.clear()
     this.postings = new Map()
     this.docLen = []
     this.totalLen = 0
@@ -194,6 +195,17 @@ export class Ledger {
   append(rec, opts = {}) {
     const text = String(rec.text || '')
     if (!text) return -1
+    // 别的会话可能也在写同一个流：发现对不上就整个重新对齐。
+    // 注意要连段一起重切——文档下标变了，旧段的位置就全错位了。
+    let onDisk = 0
+    try { onDisk = statSync(this.streamPath).size } catch {}
+    if (onDisk !== this.bytes) {
+      this.bytes = onDisk
+      this._scanStream()
+      this.episodes = []
+      this.seal(true)
+    }
+
     // 来源事件 ID 优先：同一事件重放多少次都只落一条。
     if (rec.eventKey && this._eventKeys.has(rec.eventKey)) return -1
 
@@ -227,17 +239,6 @@ export class Ledger {
     }
     const line = JSON.stringify(d)
     const bytes = Buffer.byteLength(line, 'utf8') + 1
-
-    // 别的会话可能也在写同一个流：发现对不上就整个重新对齐。
-    // 注意要连段一起重切——文档下标变了，旧段的位置就全错位了。
-    let onDisk = 0
-    try { onDisk = statSync(this.streamPath).size } catch {}
-    if (onDisk !== this.bytes) {
-      this.bytes = onDisk
-      this._scanStream()
-      this.episodes = []
-      this.seal(true)
-    }
 
     const off = this.bytes
     appendFileSync(this.streamPath, line + '\n', 'utf8')

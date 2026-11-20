@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const HARNESSES = ['dsh', 'opencode', 'workbuddy', 'zcode']
+export const HARNESSES = ['dsh', 'opencode', 'workbuddy', 'zcode', 'codex']
 
 function readJson(file) {
   try {
@@ -23,7 +23,7 @@ function includesSelfMemory(value) {
   return JSON.stringify(value || '').includes('self-memory') || JSON.stringify(value || '').includes('agent-memory')
 }
 
-export function detectHarnesses({ home = os.homedir(), repoRoot = process.cwd() } = {}) {
+export function detectHarnesses({ home = os.homedir(), repoRoot = process.cwd(), codexHome = path.join(home, '.codex') } = {}) {
   const out = []
 
   // ——— DSH ———
@@ -100,6 +100,21 @@ export function detectHarnesses({ home = os.homedir(), repoRoot = process.cwd() 
     })
   }
 
+  const codexConfig = path.join(codexHome, 'config.toml')
+  if (exists(codexHome)) {
+    let configured = false
+    try {
+      configured = /^\[plugins\."codex-memory@local-agent-memory"\]\s*$/m.test(fs.readFileSync(codexConfig, 'utf8'))
+    } catch {}
+    out.push({
+      id: 'codex',
+      label: 'Codex',
+      installed: configured,
+      markers: [codexConfig].filter(exists),
+      adapter: path.join(repoRoot, 'codex-memory'),
+      install: 'node codex-memory/install.mjs',
+    })
+  }
   return out
 }
 
@@ -116,5 +131,5 @@ export function chooseHarness(candidates, requested = 'auto') {
   if (installed.length > 1) return { ok: false, reason: '多个 harness 都装过记忆，请显式指定 --harness。', candidates: installed, ambiguous: true }
   if (candidates.length === 1) return { ok: true, harness: candidates[0] }
   if (candidates.length > 1) return { ok: false, reason: '发现了多个 harness，但都没有装过记忆，请显式指定 --harness。', candidates, ambiguous: true }
-  return { ok: false, reason: '没有发现 DSH / OpenCode / WorkBuddy / ZCode。', candidates }
+  return { ok: false, reason: `没有发现可用 harness（${HARNESSES.join(' / ')}）。`, candidates }
 }

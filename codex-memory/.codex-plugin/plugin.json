@@ -1,0 +1,7 @@
+{
+  "name": "codex-memory",
+  "version": "0.1.0",
+  "description": "本地跨会话记忆，保存 Codex 对话原文并按来源回查。",
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/"
+}

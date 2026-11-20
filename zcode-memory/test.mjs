@@ -236,7 +236,7 @@ console.log('11) 从 ZCode 数据库回填')
   prompt('bf2', '回填窗口二', t0 + 10_000)
   prompt('bf3', '回填窗口三（流里已有回答）', t0 + 20_000)
   prompt('bf4', '回填窗口四（库里没有正文）', t0 + 30_000)
-  prompt('bf6', '回填窗口六（与窗口一正文重复）', t0 + 50_000)
+  prompt('bf6', '回填窗口六（与窗口一独立，但回答文字相同）', t0 + 50_000)
   // bf3 已经在流里有一条助手记录：回填应判「已有」，不再查库、不重复写。
   hook({ hook_event_name: 'Stop', last_assistant_message: '回答三', turnId: 'bf3', session_id: 'sess_bf', timestamp: t0 + 21_000 })
 
@@ -272,21 +272,28 @@ console.log('11) 从 ZCode 数据库回填')
     type: 'tool', callID: 'sc2', tool: 'Write',
     state: { status: 'completed', input: { file_path: subFile, content: 'sub file' }, output: 'ok' },
   })
+  addMsg('m-tool3', 'assistant', t0 + 63_000)
+  addPart('p-tool3', 'm-tool3', t0 + 63_000, {
+    type: 'tool', callID: 'sc3', tool: 'Bash',
+    state: { status: 'running', input: { command: 'fixture' } },
+  })
   db.close()
 
   const bfEnv = { ...env, ZCODE_DB: dbFile }
   const first = cli(['backfill', '--session', 'sess_bf'], bfEnv)
   const firstJson = JSON.parse(first.stdout)
-  ok('回填两条缺失回答', first.code === 0 && firstJson.filled === 2, first.stdout.slice(0, 160))
+  ok('回填三条缺失回答', first.code === 0 && firstJson.filled === 3, first.stdout.slice(0, 160))
   ok('库里没有正文的窗口只计数', firstJson.noText === 1)
-  ok('与已有正文重复的不写', firstJson.duplicate === 1)
   ok('已有回答的轮不再查库', firstJson.already === 1)
   const rowsAfter = rows().filter((r) => r.type === 'assistant/message' && r.sid === 'sess_bf')
   ok('回填记录带来源与 turn', rowsAfter.some((r) => r.source && r.source.type === 'db.backfill' && r.turn === 'bf1'))
+  ok('不同轮同文各自保留', rowsAfter.some((r) => r.turn === 'bf6' && r.text === '回答一'))
+  hook({ hook_event_name: 'Stop', last_assistant_message: '回答一', turnId: 'bf1', session_id: 'sess_bf' })
+  ok('回填后迟到的同轮 Stop 去重', rows().filter((r) => r.sid === 'sess_bf' && r.turn === 'bf1' && r.type === 'assistant/message').length === 1)
 
   const second = cli(['backfill', '--session', 'sess_bf'], bfEnv)
   const secondJson = JSON.parse(second.stdout)
-  ok('重复执行不增行', secondJson.filled === 0 && secondJson.already === 3, second.stdout.slice(0, 160))
+  ok('重复执行不增行', secondJson.filled === 0 && secondJson.already === 4, second.stdout.slice(0, 160))
   ok('回填后账本仍 OK', maint(['--sync']).code === 0 && maint(['--verify']).json.status === 'OK')
 
   const dry = (() => {
@@ -304,15 +311,33 @@ console.log('11) 从 ZCode 数据库回填')
   })()
   ok('--dry-run 报将补但实际不写', dry.filled === 1 && dry.after === dry.before, JSON.stringify({ filled: dry.filled, before: dry.before, after: dry.after }))
 
+  const blobDir = join(store, 'blobs')
+  const beforeSubDry = { rows: rows().length, blobs: readdirSync(blobDir).sort().join() }
+  const subDry = cli(['backfill', '--subagents', '--session', 'sess_sub', '--dry-run'], bfEnv)
+  ok('子代理试算报告预计补写数量', subDry.code === 0 && JSON.parse(subDry.stdout).filled === 7, subDry.stdout)
+  ok('子代理试算不写流和 blob', rows().length === beforeSubDry.rows && readdirSync(blobDir).sort().join() === beforeSubDry.blobs)
   const sub1 = cli(['backfill', '--subagents', '--session', 'sess_sub'], bfEnv)
   const subJson = JSON.parse(sub1.stdout)
-  ok('子代理回填任务提示+两次调用+结果+产物', sub1.code === 0 && subJson.filled === 6, sub1.stdout.slice(0, 160))
+  ok('子代理回填任务提示+三次调用+两次结果+产物', sub1.code === 0 && subJson.filled === 7, sub1.stdout.slice(0, 160))
   const subRows = rows().filter((r) => r.sid === 'sess_sub')
   ok('任务提示标 meta，不写成用户原话', subRows.some((r) => r.type === 'subagent/task' && r.who === 'meta') && !subRows.some((r) => r.type === 'user/message'))
   ok('子代理工具与产物带 sid', subRows.some((r) => r.type === 'tool/call' && r.callId === 'sc1') && subRows.some((r) => r.type === 'artifact' && r.path === subFile))
   ok('产物记录标明 before unknown', subRows.find((r) => r.type === 'artifact').versions.before.state === 'unknown')
+  ok('运行中的工具只记录调用', subRows.filter((r) => r.callId === 'sc3').map((r) => r.type).join() === 'tool/call')
+  const completed = new DatabaseSync(dbFile)
+  completed.prepare('update part set data=? where id=?').run(JSON.stringify({
+    type: 'tool', callID: 'sc3', tool: 'Bash',
+    state: { status: 'completed', input: { command: 'fixture' }, output: 'completed after retry' },
+  }), 'p-tool3')
+  completed.close()
   const sub2 = cli(['backfill', '--subagents', '--session', 'sess_sub'], bfEnv)
-  ok('子代理回填重复执行不增行', JSON.parse(sub2.stdout).filled === 0 && JSON.parse(sub2.stdout).skipped === 6)
+  const results = rows().filter((r) => r.sid === 'sess_sub' && r.callId === 'sc3' && r.type === 'tool/result')
+  ok('下一次回填补上真正完成的结果', JSON.parse(sub2.stdout).filled === 1 && results.length === 1 && results[0].status === 'completed')
+  writeFileSync(subFile, 'sub file changed after initial snapshot', 'utf8')
+  const afterSub = readdirSync(blobDir).sort().join()
+  const sub3 = cli(['backfill', '--subagents', '--session', 'sess_sub'], bfEnv)
+  ok('子代理回填重复执行不增行', JSON.parse(sub3.stdout).filled === 0 && JSON.parse(sub3.stdout).skipped === 8)
+  ok('子代理回填跳过已记录的产物快照', readdirSync(blobDir).sort().join() === afterSub)
 }
 
 console.log('12) 篡改能被检出（独立临时库）')
@@ -328,10 +353,17 @@ console.log('12) 篡改能被检出（独立临时库）')
   })
   run({ hook_event_name: 'UserPromptSubmit', prompt: '这句话会被改掉一半' })
   const file = join(root2, 'store', 'stream.jsonl')
-  const text = readFileSync(file, 'utf8').replace('这句话会被改掉一半', '这句话被悄悄改过了')
+  const oldBody = '这句话会被改掉一半'
+  const newBody = '这句话被悄悄改过了'
+  const text = readFileSync(file, 'utf8').replaceAll(oldBody, newBody).replace(sha256(oldBody), sha256(newBody))
   writeFileSync(file, text, 'utf8')
   const v = spawnSync(process.execPath, [CLI, 'verify'], { env: env2, encoding: 'utf8', timeout: 30000 })
   ok('篡改后 verify 失败且报 BAD', v.status === 1 && /BAD/.test(v.stdout), v.stdout)
+  const checkpoint = readFileSync(join(store2, 'integrity.json'), 'utf8')
+  run({ hook_event_name: 'UserPromptSubmit', prompt: '篡改后的正常追加', turnId: 't2' })
+  const after = cli(['verify'], env2)
+  ok('正常追加不接纳被改过的已校验前缀', after.code === 1 && /BAD/.test(after.stdout) &&
+     readFileSync(join(store2, 'integrity.json'), 'utf8') === checkpoint)
   ok('流确实存在且非空', statSync(file).size > 0)
 }
 

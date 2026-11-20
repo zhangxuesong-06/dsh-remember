@@ -12,9 +12,24 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { scanFile } from '../tools/mem-journal.mjs'
+
+export function readStream(file) {
+  try {
+    if (fs.existsSync(file)) {
+      const { rows, errors, lineNumbers } = scanFile(file)
+      return { entries: rows.map((row, index) => ({ row, line: lineNumbers[index] })), skipped: errors.length, missing: false }
+    }
+  } catch {}
+  return { entries: [], skipped: 0, missing: true }
+}
 
 export function repoRoot() {
   return process.env.AGENT_MEMORY_HOME || path.join(os.homedir(), '.agent-memory')
+}
+
+export function codexRoot() {
+  return process.env.CODEX_MEMORY_HOME || path.join(repoRoot(), 'codex')
 }
 
 export function paths() {
@@ -70,6 +85,7 @@ export function streams() {
     { source: 'opencode', path: path.join(l.opencode, 'stream.jsonl'), workspace: null },
     { source: 'workbuddy', path: path.join(l.workbuddy, 'stream.jsonl'), workspace: null },
     { source: 'zcode', path: path.join(l.zcode, 'stream.jsonl'), workspace: null },
+    { source: 'codex', path: path.join(codexRoot(), 'stream.jsonl'), workspace: null },
   ]
   let dirs = []
   try { dirs = fs.readdirSync(l.dsh, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) } catch {}

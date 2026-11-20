@@ -1,4 +1,4 @@
-// 跨 harness 只读查询：OpenCode / DSH / WorkBuddy / ZCode。
+// 跨 harness 只读查询：OpenCode / DSH / WorkBuddy / ZCode / Codex。
 //
 // 边界：
 //   - 只读：只 readFileSync / statSync / readdirSync，不建目录、不拿锁、不写缓存；
@@ -8,10 +8,9 @@
 //
 // 打分和 OpenCode 的 recall 保持一致（同一套 BM25、覆盖率、新鲜加分），
 // 这样跨库结果之间才可比。分词来自 mem-tokenize.mjs，不 import mem-core。
-import fs from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { tok } from '../tools/mem-tokenize.mjs'
-import { streams } from './repo.mjs'
+import { readStream, streams } from './repo.mjs'
 
 const DAY = 864e5
 const K1 = 1.25
@@ -29,22 +28,6 @@ const KIND = {
 }
 const KIND_WEIGHT = { message: 1, note: 1, decision: 1, finding: 1, todo: 1, data: 1, artifact: 0.85, episode: 0.55, tool: 0.35 }
 const WHO_WEIGHT = { meta: 0.4 }
-
-function readJsonl(file) {
-  let text
-  try { text = fs.readFileSync(file, 'utf8') } catch { return { rows: [], skipped: 0, missing: true } }
-  const rows = []
-  let skipped = 0
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const raw = JSON.parse(line)
-      if (raw && typeof raw === 'object') rows.push(raw)
-      else skipped++
-    } catch { skipped++ }
-  }
-  return { rows, skipped, missing: false }
-}
 
 function listStores() {
   const { layout, list } = streams()
@@ -67,6 +50,7 @@ function normalize(source, workspace, line, raw) {
     text: String(raw.text ?? ''),
     sid: raw.sid || null,
     messageID: raw.messageID || null,
+    turnID: raw.turnID || null,
     tool: raw.tool || null,
     rawType: type || String(raw.kind || ''),
   }
@@ -87,14 +71,14 @@ export function loadAll({ withTools = false } = {}) {
       }
       bySource.set(entry.source, s)
     }
-    if (!fs.existsSync(entry.path)) continue
-    const { rows, skipped } = readJsonl(entry.path)
+    const { entries, skipped, missing } = readStream(entry.path)
+    if (missing) continue
     s.exists = true
-    s.read += rows.length
+    s.read += entries.length
     s.skipped += skipped
     s.workspaces += 1
-    rows.forEach((raw, i) => {
-      const rec = normalize(entry.source, entry.workspace, i + 1, raw)
+    entries.forEach(({ row, line }) => {
+      const rec = normalize(entry.source, entry.workspace, line, row)
       rec.store = entry.path
       if (!rec.text.trim()) return
       s.records += 1
@@ -105,8 +89,7 @@ export function loadAll({ withTools = false } = {}) {
       if (rec.ts > s.lastTs) s.lastTs = rec.ts
     })
   }
-  // 让 sources 的顺序稳定：opencode / dsh / workbuddy / zcode。
-  const order = { opencode: 0, dsh: 1, workbuddy: 2, zcode: 3 }
+  const order = { opencode: 0, dsh: 1, workbuddy: 2, zcode: 3, codex: 4 }
   const stores = [...bySource.values()].sort((a, b) => order[a.source] - order[b.source])
   return { records, stores }
 }
@@ -289,7 +272,7 @@ function main() {
     if (o.json) { console.log(JSON.stringify({ query, stores: hits.stores || [], hits }, null, 2)); return }
     if (!hits.length) { console.log('没找到。可以试 trace "<原话片段>"，或加 --with-tools。'); return }
     const count = (src) => hits.filter((h) => h.source === src).length
-    console.log(`跨库召回 ${hits.length} 条（OpenCode ${count('opencode')} · DSH ${count('dsh')} · WorkBuddy ${count('workbuddy')} · ZCode ${count('zcode')}）\n`)
+    console.log(`跨库召回 ${hits.length} 条（OpenCode ${count('opencode')} · DSH ${count('dsh')} · WorkBuddy ${count('workbuddy')} · ZCode ${count('zcode')} · Codex ${count('codex')}）\n`)
     for (const h of hits) {
       console.log(`[${h.source}] ${dayOf(h.ts)} ${h.workspace || '-'} ${refOf(h)}  ${excerpt(h.text)}`)
     }

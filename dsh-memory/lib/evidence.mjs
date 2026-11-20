@@ -94,10 +94,10 @@ export function createIntegrity(root, names = ['stream.jsonl', 'marks.jsonl']) {
   const record = (name) => {
     if (!names.includes(name)) throw new Error('Unknown integrity file')
     const state = read()
-    const file = path.join(root, name)
-    const data = scan(file)
+    const data = inspect(name, state.files[name])
+    if (data.problems.length) throw new Error(`Integrity failure in ${name}: ${data.problems[0].reason}`)
     // 另一个进程可能正在写最后一行；不要把半行接纳成基线。
-    if (data.errors.length || data.partial) throw new Error('Journal has an incomplete or invalid tail; run verify')
+    if (data.partial) throw new Error('Journal has an incomplete tail; run verify')
     state.files[name] = { bytes: data.bytes.length, sha256: sha256(data.bytes), records: data.rows.length,
       baselineAt: state.files[name]?.baselineAt || new Date().toISOString() }
     atomicWrite(checkpoint, state)

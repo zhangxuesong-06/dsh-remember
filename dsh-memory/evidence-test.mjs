@@ -42,12 +42,22 @@ try {
 
   // 3. 工具前后版本与失败隔离
   {
+    const first = fresh()
+    const second = new Ledger(first.dir).open()
+    const record = { who: 'he', text: 'shared event', sid: 'shared', eventKey: 'shared:1' }
+    first.append(record)
+    check('另一实例刚写入的事件不会重复落盘', second.append(record) === -1 && second.rows().length === 1)
+    first.close()
+    second.close()
+  }
+
+  {
     const l = fresh()
     const file = path.join(root, 'feature.js')
     fs.writeFileSync(file, 'version one')
     const pending = new Map()
     const ctx = { sid: 's', line: 's', root: l.dir, cwd: root, pending }
-    const call = eventToRecords({ type: 'tool/call', seq: 1, time: Date.now(), data: { name: 'write', callId: 'c1', arguments: JSON.stringify({ path: file }) } }, ctx)
+    const call = eventToRecords({ type: 'tool/call', seq: 1, time: Date.now(), data: { name: 'write', callId: 'c1', arguments: { path: file } } }, ctx)
     for (const r of call) l.append(r)
     fs.writeFileSync(file, 'version two')
     const result = eventToRecords({ type: 'tool/result', seq: 2, time: Date.now(), data: { message: { toolCallId: 'c1', content: [{ type: 'text', text: 'saved' }], isError: false } } }, ctx)
@@ -82,6 +92,18 @@ try {
     check('合法尾部显示 PENDING', l.verify().status === 'PENDING', l.verify().status)
     l.sync()
     check('接纳后 OK', l.verify().status === 'OK')
+    l.close()
+  }
+
+  {
+    const l = fresh()
+    l.append({ who: 'he', text: 'original' })
+    const bytes = fs.readFileSync(l.streamPath, 'utf8')
+    fs.writeFileSync(l.streamPath, bytes.replace('"turn":null', '"turn":1234'))
+    check('元数据篡改被检出', l.verify().status === 'BAD')
+    l.append({ who: 'me', text: 'next' })
+    check('新记录不会把篡改过的前缀接纳为基线', l.verify().status === 'BAD', l.verify().status)
+    check('完整性报错时仍保存最新原话', l.rows().some((row) => row.text === 'next'))
     l.close()
   }
 

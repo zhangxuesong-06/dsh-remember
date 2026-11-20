@@ -5,9 +5,11 @@
 //   · 整份日志可能是**多个 zstd 帧**拼起来的，直接一次性解只能拿到第一帧；
 //   · 第一帧里只有 header 那一行，事件在后面几帧里。
 
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { zstdDecompressSync } from 'node:zlib'
 import { join } from 'node:path'
+import { normPath, sameWorkspace } from './config.mjs'
+import { isSubagent } from './subagent.mjs'
 
 const ZSTD_MAGIC = 4247762216
 
@@ -16,7 +18,7 @@ function scanFrames(buf) {
   let off = 0
   while (off < buf.length) {
     const start = off
-    if (buf.length - off < 4 || buf.readUInt32LE(off) !== ZSTD_MAGIC) break
+    if (buf.length - off < 5 || buf.readUInt32LE(off) !== ZSTD_MAGIC) break
     off += 4
     const desc = buf.readUInt8(off); off += 1
     const fcs = desc >>> 6
@@ -37,6 +39,7 @@ function scanFrames(buf) {
       if (last) break
     }
     if (checksum) off += 4
+    if (off > buf.length) break
     frames.push({ start, end: off })
   }
   return frames
@@ -44,7 +47,11 @@ function scanFrames(buf) {
 
 export function readSessionFile(path) {
   let buf
-  try { buf = readFileSync(path) } catch { return null }
+  let mtime
+  try {
+    mtime = statSync(path).mtimeMs
+    buf = readFileSync(path)
+  } catch { return null }
   const events = []
   const frames = scanFrames(buf)
   for (const fr of frames) {
@@ -57,7 +64,7 @@ export function readSessionFile(path) {
   }
   if (!events.length) return null
   const header = events[0] && events[0].type === 'session' ? events[0] : null
-  return { header, events, mtime: statSync(path).mtimeMs }
+  return { header, events, mtime }
 }
 
 // 一个工作区里所有会话（不含子会话）
@@ -72,10 +79,13 @@ export function listSubagentSessions(sessionsRoot, cwd) {
 }
 
 function listAll(sessionsRoot, cwd, subagents) {
+  return listWorkspaceSessions(sessionsRoot, cwd).filter((session) => isSubagent(session.header) === subagents)
+}
+
+export function listWorkspaceSessions(sessionsRoot, cwd) {
   const out = []
   let dirs = []
   try { dirs = readdirSync(sessionsRoot, { withFileTypes: true }) } catch { return out }
-  const want = norm(cwd)
 
   for (const d of dirs) {
     if (!d.isDirectory()) continue
@@ -87,29 +97,19 @@ function listAll(sessionsRoot, cwd, subagents) {
       const base = join(dir, s.name)
       // v4 文件信息更全（带 turn/step、更完整的事件），两个都在时优先它；
       // 只有旧格式 `session.jsonl.zstd` 的老会话也要能用，不能因为文件名不同就丢掉。
-      let f = null
       for (const name of ['session.v4.jsonl.zstd', 'session.jsonl.zstd']) {
-        const candidate = join(base, name)
-        if (existsSync(candidate)) { f = candidate; break }
+        const path = join(base, name)
+        const parsed = readSessionFile(path)
+        if (!parsed?.header?.id || parsed.events.length < 2) continue
+        if (sameWorkspace(parsed.header.cwd, cwd)) {
+          out.push({ id: parsed.header.id, path, mtime: parsed.mtime, header: parsed.header, events: parsed.events })
+        }
+        break
       }
-      if (!f) continue
-      let size = 0
-      try { size = statSync(f).size } catch { continue }
-      if (size < 512) continue
-      const parsed = readSessionFile(f)
-      if (!parsed || !parsed.header) continue
-      if (norm(parsed.header.cwd) !== want) continue
-      const deep = (parsed.header.delegationDepth || 0) > 0 || parsed.header.origin === 'subagent'
-      if (deep !== subagents) continue
-      out.push({ id: parsed.header.id, path: f, mtime: parsed.mtime, header: parsed.header, events: parsed.events })
     }
   }
   out.sort((a, b) => (a.header.createdAt || a.mtime) - (b.header.createdAt || b.mtime))
   return out
 }
 
-function norm(p) {
-  return String(p || '').replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase()
-}
-
-export { norm as normPath }
+export { normPath }

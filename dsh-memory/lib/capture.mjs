@@ -233,10 +233,10 @@ export function eventToRecords(event, ctx) {
     case 'tool/call': {
       const name = data.name || '?'
       noteCall(data.callId, name)
-      const raw = String(data.arguments || '')
-      const args = parseArgs(raw)
+      const args = parseArgs(data.arguments)
+      const raw = typeof data.arguments === 'object' && data.arguments !== null ? JSON.stringify(args) : String(data.arguments || '')
       const paths = ctx && ctx.root ? artifactPaths(name, args, ctx.cwd) : []
-      const before = paths.map((p) => snapshot(ctx.root, p))
+      const before = paths.map((p) => ctx.historical ? { path: p, state: 'unknown' } : snapshot(ctx.root, p))
       if (ctx && ctx.pending && data.callId) ctx.pending.set(data.callId, { paths, before, name, ts })
       let evidence = null
       try { if (ctx && ctx.root) evidence = putBlob(ctx.root, raw) } catch (e) { _log('证据写入失败：' + e.message) }

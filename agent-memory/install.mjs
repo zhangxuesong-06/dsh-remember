@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { detectHarnesses, chooseHarness } from './detect.mjs'
+import { detectHarnesses, chooseHarness, HARNESSES } from './detect.mjs'
 import { ADAPTERS } from './adapters/index.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -77,8 +77,9 @@ function printHelp() {
   node agent-memory/install.mjs --harness opencode
   node agent-memory/install.mjs --harness workbuddy
   node agent-memory/install.mjs --harness zcode
+  node agent-memory/install.mjs --harness codex
 
-  --harness auto|dsh|opencode|workbuddy|zcode   默认 auto：只自动选已装过记忆的那个
+  --harness auto|${HARNESSES.join('|')}   默认 auto：只自动选已装过记忆的那个
   --workspace <路径>                       DSH 首次安装时写入的工作区
   --dry-run                                只打印计划，不写任何文件
   --json                                   用 JSON 输出识别结果
@@ -88,7 +89,7 @@ function printHelp() {
 function main() {
   const args = parseArgs()
   if (args.help) { printHelp(); return }
-  const candidates = detectHarnesses({ home: os.homedir(), repoRoot: REPO })
+  const candidates = detectHarnesses({ home: os.homedir(), repoRoot: REPO, codexHome: process.env.CODEX_HOME })
   const choice = chooseHarness(candidates, args.harness)
 
   if (args.json) {
@@ -102,7 +103,7 @@ function main() {
     for (const c of choice.candidates || candidates) {
       console.error(`  ${c.id.padEnd(10)} ${c.installed ? '已装记忆' : '仅检测到软件'}  ${c.markers[0] || ''}`)
     }
-    console.error('\n用 --harness dsh|opencode|workbuddy 明确指定。')
+    console.error(`\n用 --harness ${HARNESSES.join('|')} 明确指定。`)
     // 识别结果不是安装失败：dry-run / json 是给人或模型看的，退出码保持 0。
     if (!args.dryRun && !args.json) process.exitCode = 2
     return

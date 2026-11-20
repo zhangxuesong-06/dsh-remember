@@ -22,7 +22,10 @@ const ML = 'D:\\path\\to\\multi'
 writeFileSync(join(process.env.DSH_HOME, 'dsh-memory', 'config.json'), JSON.stringify({
   enabled: true,
   workspaces: [CWD],
-  lines: [{ name: '甲', cwd: ML, members: ['session-line-a'] }],
+  lines: [
+    { name: '甲', cwd: ML, members: ['session-line-a'] },
+    { name: '乙', cwd: ML, members: ['session-line-b'] },
+  ],
   backfillOnMount: false,
 }))
 
@@ -209,6 +212,13 @@ if (emit) {
     // （注意别拿回复里回显的 query 当证据）
     const r5 = await recall.execute({ query: '别把我说的话记进去' })
     ok('没登记那只的话没进库', /想不起来/.test(r5.text), r5.text.slice(0, 40))
+
+    const child = { id: 'child-a', header: { cwd: ML, parentSession: 'session-line-a', origin: 'subagent' } }
+    emit(child, ev('tool/call', { name: 'Bash', callId: 'child-call', arguments: '{"command":"echo child"}' }, 1))
+    const lineA = new Ledger(workspaceDir(ML, '甲')).open()
+    ok('实时子代理证据按父会话写入所属线', lineA.rows().some((row) => row.sid === child.id
+      && row.callId === 'child-call' && row.source?.parentSession === 'session-line-a'))
+    lineA.close()
 
     // 文件搜索的结果不该进记忆（dsh-ops 的工具名以前漏在拦名单外）
     emit(fakeSession, ev('tool/call', { name: 'ops_grep', callId: 'g1', arguments: '{"pattern":"x"}' }, 10))
