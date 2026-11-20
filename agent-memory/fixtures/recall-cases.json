@@ -1,0 +1,64 @@
+{
+  "now": "2026-11-20T00:00:00.000Z",
+  "streams": [
+    {
+      "source": "opencode",
+      "rows": [
+        {"who":"user","kind":"message","sid":"cache","messageID":"u1","turnID":"u1","ts":1794873600000,"text":"上次缓存方案选了什么？"},
+        {"who":"assistant","kind":"message","sid":"cache","messageID":"a1","turnID":"u1","ts":1794873601000,"text":"缓存存本地文件，服务离线时也能读取。"},
+        {"who":"assistant","kind":"message","sid":"demo","messageID":"a2","turnID":"u2","ts":1795132800000,"text":"演示环境的缓存读取走 Redis。"},
+        {"who":"user","kind":"message","sid":"cache","messageID":"u3","turnID":"u3","ts":1795046400000,"text":"更正一下，离线缓存只保留七天。"},
+        {"who":"assistant","kind":"message","sid":"cache","messageID":"a3","turnID":"u3","ts":1795046401000,"text":"收到，我会更新缓存保留期限。"}
+      ]
+    },
+    {
+      "source": "dsh",
+      "workspace": "robot",
+      "rows": [
+        {"who":"he","type":"user/message","sid":"setup","messageID":"d1","text":"外参记录的方向定下来了吗？"},
+        {"who":"me","type":"assistant/message","sid":"setup","messageID":"d2","turnID":"2","turn":2,"text":"实车外参用 lidar → base_link，平移单位是米。"}
+      ]
+    },
+    {
+      "source": "dsh",
+      "workspace": "sim",
+      "rows": [
+        {"who":"he","type":"user/message","sid":"setup","messageID":"d1","text":"仿真外参需要演示逆变换。"},
+        {"who":"me","type":"assistant/message","sid":"setup","messageID":"d2","turnID":"2","turn":2,"text":"仿真外参的逆变换是 base_link → lidar。"}
+      ]
+    },
+    {
+      "source": "workbuddy",
+      "rows": [
+        {"who":"he","type":"user/message","sid":"report","messageID":"w1","text":"报告里的算式需要验收什么？"},
+        {"who":"me","type":"assistant/message","sid":"report","messageID":"w2","text":"报告的公式要保留为可编辑对象。\n  表格里的分式也要能直接修改。  "},
+        {"who":"act","type":"tool/result","sid":"report","text":"公式验收：分式编辑成功。"}
+      ]
+    },
+    {
+      "source": "zcode",
+      "rows": [
+        {"who":"he","type":"user/message","sid":"backup","turn":0,"text":"归档怎么验证？"},
+        {"who":"he","type":"user/message","sid":"backup","turn":1,"text":"先给我确认备份恢复流程。"},
+        {"who":"me","type":"assistant/message","sid":"backup","turn":1,"text":"先恢复备份快照，再比对账本指纹。"},
+        {"who":"me","type":"assistant/message","sid":"backup","turn":0,"text":"归档解开后，要用原引用回读原话。"}
+      ]
+    },
+    {
+      "source": "codex",
+      "rows": [
+        {"who":"user","type":"user/message","sid":"calibration","turnID":"c1","text":"标定实验用真实场景吗？"},
+        {"who":"assistant","type":"assistant/message","sid":"calibration","turnID":"c1","text":"标定实验先跑合成样本，核对手眼变换矩阵。"}
+      ]
+    }
+  ],
+  "cases": [
+    {"id":"cache-answer","query":"离线缓存读取方式","ref":"opencode:2","sid":"cache","turnID":"u1","who":"assistant","text":"缓存存本地文件，服务离线时也能读取。"},
+    {"id":"cache-correction","query":"离线缓存最后设成几天保留","ref":"opencode:4","sid":"cache","turnID":"u3","who":"user","text":"更正一下，离线缓存只保留七天。"},
+    {"id":"robot-extrinsics","query":"外参坐标方向是什么 lidar base_link","ref":"dsh:robot:2","sid":"setup","turnID":"2","turn":2,"who":"assistant","text":"实车外参用 lidar → base_link，平移单位是米。"},
+    {"id":"editable-formulas","query":"报告里的分式能否编辑修改","ref":"workbuddy:2","sid":"report","who":"assistant","text":"报告的公式要保留为可编辑对象。\n  表格里的分式也要能直接修改。  "},
+    {"id":"late-archive-answer","query":"归档打开后怎么凭引用核对原话","ref":"zcode:4","sid":"backup","turn":0,"who":"assistant","text":"归档解开后，要用原引用回读原话。"},
+    {"id":"archive-paraphrase","query":"归档备份后怎么核对","ref":"zcode:4","sid":"backup","turn":0,"who":"assistant","text":"归档解开后，要用原引用回读原话。"},
+    {"id":"calibration-sample","query":"手眼标定先拿哪类样本验矩阵","ref":"codex:2","sid":"calibration","turnID":"c1","who":"assistant","text":"标定实验先跑合成样本，核对手眼变换矩阵。"}
+  ]
+}

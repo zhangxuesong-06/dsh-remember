@@ -116,6 +116,20 @@ BM25(K1=1.25, B=0.72) × 新鲜加分 × 类别权重
 
 ## 验收
 
+### 五端合成召回基线
+
+```bash
+node agent-memory/eval-recall.mjs
+node agent-memory/eval-recall.mjs --json
+node agent-memory/eval-recall.mjs --check
+```
+
+评测用固定时钟和临时账本，从五个来源一起召回。题目给出改述问句和人工指定的原文引用。工具按引用核对完整正文、角色、会话和已有的轮次标识，再按目标在结果里的位置计算 Hit@3 和 MRR@8。排行与原文回读分开记录。没有可靠轮次标识的旧格式仍按明确的原文引用评分。
+
+`--json` 输出逐题的来源、排名、原文回读结果和候选记录。 `--check` 与 `fixtures/recall-baseline.json` 比较，题目变更、结果变动或原文回读异常时以退出码 1 报出题号。基线保留一条已知的改述漏召回题，便于比较后续改动。输入都来自 `fixtures/recall-cases.json`，真实库评测另行运行。
+
+### 历史记录
+
 2026-11-14 实测：
 
 ```text

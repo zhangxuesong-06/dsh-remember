@@ -1,0 +1,234 @@
+{
+  "now": "2026-11-20T00:00:00.000Z",
+  "k": 8,
+  "all": {
+    "n": 7,
+    "hit3": 0.857,
+    "mrr": 0.69
+  },
+  "bySource": {
+    "opencode": {
+      "n": 2,
+      "hit3": 1,
+      "mrr": 0.667
+    },
+    "dsh": {
+      "n": 1,
+      "hit3": 1,
+      "mrr": 0.5
+    },
+    "workbuddy": {
+      "n": 1,
+      "hit3": 1,
+      "mrr": 1
+    },
+    "zcode": {
+      "n": 2,
+      "hit3": 0.5,
+      "mrr": 0.5
+    },
+    "codex": {
+      "n": 1,
+      "hit3": 1,
+      "mrr": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "cache-answer",
+      "query": "离线缓存读取方式",
+      "ref": "opencode:2",
+      "evidence": {
+        "ref": "opencode:2",
+        "who": "assistant",
+        "sid": "cache",
+        "turnID": "u1",
+        "turn": null,
+        "text": "缓存存本地文件，服务离线时也能读取。"
+      },
+      "rank": 3,
+      "hits": [
+        {
+          "ref": "opencode:3",
+          "who": "assistant",
+          "sid": "demo",
+          "turnID": "u2",
+          "turn": null
+        },
+        {
+          "ref": "opencode:4",
+          "who": "user",
+          "sid": "cache",
+          "turnID": "u3",
+          "turn": null
+        },
+        {
+          "ref": "opencode:2",
+          "who": "assistant",
+          "sid": "cache",
+          "turnID": "u1",
+          "turn": null
+        }
+      ]
+    },
+    {
+      "id": "cache-correction",
+      "query": "离线缓存最后设成几天保留",
+      "ref": "opencode:4",
+      "evidence": {
+        "ref": "opencode:4",
+        "who": "user",
+        "sid": "cache",
+        "turnID": "u3",
+        "turn": null,
+        "text": "更正一下，离线缓存只保留七天。"
+      },
+      "rank": 1,
+      "hits": [
+        {
+          "ref": "opencode:4",
+          "who": "user",
+          "sid": "cache",
+          "turnID": "u3",
+          "turn": null
+        }
+      ]
+    },
+    {
+      "id": "robot-extrinsics",
+      "query": "外参坐标方向是什么 lidar base_link",
+      "ref": "dsh:robot:2",
+      "evidence": {
+        "ref": "dsh:robot:2",
+        "who": "assistant",
+        "sid": "setup",
+        "turnID": "2",
+        "turn": 2,
+        "text": "实车外参用 lidar → base_link，平移单位是米。"
+      },
+      "rank": 2,
+      "hits": [
+        {
+          "ref": "dsh:sim:2",
+          "who": "assistant",
+          "sid": "setup",
+          "turnID": "2",
+          "turn": 2
+        },
+        {
+          "ref": "dsh:robot:2",
+          "who": "assistant",
+          "sid": "setup",
+          "turnID": "2",
+          "turn": 2
+        },
+        {
+          "ref": "dsh:robot:1",
+          "who": "user",
+          "sid": "setup",
+          "turnID": null,
+          "turn": null
+        }
+      ]
+    },
+    {
+      "id": "editable-formulas",
+      "query": "报告里的分式能否编辑修改",
+      "ref": "workbuddy:2",
+      "evidence": {
+        "ref": "workbuddy:2",
+        "who": "assistant",
+        "sid": "report",
+        "turnID": null,
+        "turn": null,
+        "text": "报告的公式要保留为可编辑对象。\n  表格里的分式也要能直接修改。  "
+      },
+      "rank": 1,
+      "hits": [
+        {
+          "ref": "workbuddy:2",
+          "who": "assistant",
+          "sid": "report",
+          "turnID": null,
+          "turn": null
+        },
+        {
+          "ref": "workbuddy:1",
+          "who": "user",
+          "sid": "report",
+          "turnID": null,
+          "turn": null
+        }
+      ]
+    },
+    {
+      "id": "late-archive-answer",
+      "query": "归档打开后怎么凭引用核对原话",
+      "ref": "zcode:4",
+      "evidence": {
+        "ref": "zcode:4",
+        "who": "assistant",
+        "sid": "backup",
+        "turnID": null,
+        "turn": 0,
+        "text": "归档解开后，要用原引用回读原话。"
+      },
+      "rank": 1,
+      "hits": [
+        {
+          "ref": "zcode:4",
+          "who": "assistant",
+          "sid": "backup",
+          "turnID": null,
+          "turn": 0
+        }
+      ]
+    },
+    {
+      "id": "archive-paraphrase",
+      "query": "归档备份后怎么核对",
+      "ref": "zcode:4",
+      "evidence": {
+        "ref": "zcode:4",
+        "who": "assistant",
+        "sid": "backup",
+        "turnID": null,
+        "turn": 0,
+        "text": "归档解开后，要用原引用回读原话。"
+      },
+      "rank": null,
+      "hits": [
+        {
+          "ref": "zcode:1",
+          "who": "user",
+          "sid": "backup",
+          "turnID": null,
+          "turn": 0
+        }
+      ]
+    },
+    {
+      "id": "calibration-sample",
+      "query": "手眼标定先拿哪类样本验矩阵",
+      "ref": "codex:2",
+      "evidence": {
+        "ref": "codex:2",
+        "who": "assistant",
+        "sid": "calibration",
+        "turnID": "c1",
+        "turn": null,
+        "text": "标定实验先跑合成样本，核对手眼变换矩阵。"
+      },
+      "rank": 1,
+      "hits": [
+        {
+          "ref": "codex:2",
+          "who": "assistant",
+          "sid": "calibration",
+          "turnID": "c1",
+          "turn": null
+        }
+      ]
+    }
+  ]
+}

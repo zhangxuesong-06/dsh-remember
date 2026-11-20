@@ -51,6 +51,7 @@ function normalize(source, workspace, line, raw) {
     sid: raw.sid || null,
     messageID: raw.messageID || null,
     turnID: raw.turnID || null,
+    turn: raw.turn ?? null,
     tool: raw.tool || null,
     rawType: type || String(raw.kind || ''),
   }
