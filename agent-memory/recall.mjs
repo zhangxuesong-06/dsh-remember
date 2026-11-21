@@ -58,7 +58,7 @@ function normalize(source, workspace, line, raw) {
 }
 
 // 默认只收对话与派生记录；工具行要显式打开。
-export function loadAll({ withTools = false } = {}) {
+export function loadAll({ withTools = false, withProvenance = false } = {}) {
   const records = []
   const bySource = new Map()
   const { list, dshRoot } = listStores()
@@ -81,6 +81,13 @@ export function loadAll({ withTools = false } = {}) {
     entries.forEach(({ row, line }) => {
       const rec = normalize(entry.source, entry.workspace, line, row)
       rec.store = entry.path
+      if (withProvenance && entry.source === 'opencode') {
+        rec.seq = Number.isSafeInteger(row.seq) ? row.seq : null
+        if (rec.kind === 'episode' && row.source?.type === 'derived.observation') {
+          rec.evidenceIds = Array.isArray(row.sourceIDs) ? row.sourceIDs.filter(id => typeof id === 'string') : []
+          rec.requestSeq = Number.isSafeInteger(row.requestSeq) ? row.requestSeq : null
+        }
+      }
       if (!rec.text.trim()) return
       s.records += 1
       if (rec.kind === 'tool') s.tools += 1

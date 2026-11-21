@@ -8,7 +8,7 @@ import { parseRef, readAt, recall, refOf } from './recall.mjs'
 const SOURCES = ['opencode', 'dsh', 'workbuddy', 'zcode', 'codex']
 const K = 8
 
-function writeStreams(root, streams) {
+export function writeStreams(root, streams) {
   for (const { source, workspace, rows } of streams) {
     if (!SOURCES.includes(source)) throw new Error(`未知来源 ${source}`)
     if (source === 'dsh' && !/^[a-z0-9_-]+$/i.test(workspace ?? '')) {

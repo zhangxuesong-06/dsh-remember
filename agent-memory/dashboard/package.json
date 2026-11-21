@@ -1,0 +1,10 @@
+{
+  "name": "agent-memory-dashboard",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "3d-force-graph": "1.80.2",
+    "d3-force-3d": "3.0.6",
+    "three": "0.187.0"
+  }
+}
