@@ -1,6 +1,5 @@
 import { sources } from './graph-data.mjs'
 import { createGraph } from './graph-view.mjs'
-import { clusterHits } from './sphere.mjs'
 
 const $ = id => document.getElementById(id)
 const roles = { user: '用户', assistant: '助手', action: '工具', meta: '派生记录' }
@@ -14,9 +13,12 @@ let requestId = 0
 let detailId = 0
 let selected
 let detail
-const graph = createGraph($('graph'), $('sky'), $('marker'), $('rotation'), select, selectLightPoint)
-let overviewPoints = []
-let overviewRequest = 0
+let graph
+try { graph = await createGraph($('graph'), $('marker'), $('rotation'), select) }
+catch (error) { console.error('记忆星图初始化失败', error) }
+const points = new Map()
+let overviewRevision
+let pendingGalaxy
 
 for (const [id, source] of Object.entries(sources)) {
   $('source').append(new Option(source.label, id))
@@ -24,7 +26,7 @@ for (const [id, source] of Object.entries(sources)) {
   item.dataset.source = id
   $('legend').append(item)
 }
-for (const id of ['zoom-in', 'zoom-out', 'reset', 'rotation', 'links', 'focus', 'all-points']) $(id).disabled = !graph
+for (const id of ['zoom-in', 'zoom-out', 'reset', 'rotation', 'links', 'focus']) $(id).disabled = !graph
 
 function element(tag, text, className) {
   const node = document.createElement(tag)
@@ -95,50 +97,56 @@ function dateLabel(ts) {
   return ts && Number.isFinite(new Date(ts).getTime()) ? date.format(ts) : ''
 }
 
-let visible = new Map()
-let relations = []
-
-function updateSceneCount() {
-  const additional = overviewPoints.filter(([ref]) => !visible.has(ref)).length
-  $('scene-count').textContent = (visible.size + additional) + ' 颗记忆星点'
+function showPoints() {
+  graph?.setPoints([...points.values()])
+  $('scene-count').textContent = points.size + ' 颗记忆星点'
+  message('map-message', points.size ? '' : '暂无可显示的记忆。')
 }
 
-async function refreshOverview() {
-  const request = ++overviewRequest
-  if (!graph || !$('all-points').checked) {
-    $('all-points').parentElement.title = ''
-    overviewPoints = []
-    graph?.setOverviewPoints(overviewPoints)
-    updateSceneCount()
+function loadGalaxy() {
+  if (!graph) {
+    $('scene-count').hidden = true
+    message('map-message', '当前浏览器无法加载三维视图，仍可以检索和管理记忆。')
     return
   }
-  $('all-points').parentElement.title = '正在加载全部记忆星点'
-  try {
-    const {points} = await api('/api/atlas/points')
-    if (request !== overviewRequest) return
-    overviewPoints = points
-    graph.setOverviewPoints(points)
-    updateSceneCount()
-  } catch (error) {
-    if (request !== overviewRequest) return
-    $('all-points').checked = false
-    await refreshOverview()
-    message('message',error.message)
-  } finally {
-    if (request === overviewRequest || !$('all-points').checked) $('all-points').parentElement.title = ''
+  pendingGalaxy ??= api('/api/atlas/points').then(snapshot => {
+    if (snapshot.revision === overviewRevision) return
+    points.clear()
+    for (const point of snapshot.points) points.set(point[0], point)
+    overviewRevision = snapshot.revision
+    showPoints()
+    if (selected && points.has(selected)) focus(selected)
+    else graph.reset(false)
+  }).catch(error => {
+    message('map-message', error.message)
+  }).finally(() => { pendingGalaxy = undefined })
+  return pendingGalaxy
+}
+
+async function readNeighborhood(params) {
+  const route = '/api/atlas?' + params
+  const snapshot = await api(route)
+  if (!graph || snapshot.revision === overviewRevision) return snapshot
+  await loadGalaxy()
+  if (snapshot.revision === overviewRevision) return snapshot
+  const latest = await api(route)
+  return latest.revision === overviewRevision ? latest : null
+}
+
+function includeRecords(records) {
+  if (!graph) return
+  let changed = false
+  for (const { ref, source, position } of records) {
+    if (points.has(ref)) continue
+    points.set(ref, [ref, source, position])
+    changed = true
   }
+  if (changed) showPoints()
 }
 
-function selectLightPoint(ref) {
-  $('query').value = ref
-  $('source').value = ''
-  $('search').requestSubmit()
-}
-
-function render(data, atlas, first) {
+function render(data) {
   const query = filters.get('q')
   const inResults = tab === 'results'
-  const recent = inResults && !query
   $('results-label').textContent = query ? '搜索结果' : '近期记忆'
   $('items').replaceChildren(
     ...data.records.map(recordItem),
@@ -156,40 +164,16 @@ function render(data, atlas, first) {
   $('page').textContent = (pages[tab] + 1) + ' / ' + pageCount
   $('demo-label').hidden = !data.demo
 
-  visible = new Map(atlas.records.map(record => [record.ref,record]))
-  relations = atlas.relations
-  const highlights = recent ? null : data.records.map(record => record.ref)
-  const positions = new Map(atlas.records.map(record => [record.ref,record.position]))
-  const groups = data.mode === 'recall' ? clusterHits(highlights ?? [], positions) : []
-  graph?.setRecords(atlas.records, relations, highlights)
-  updateSceneCount()
-  $('basis').hidden = !visible.size
-  message('map-message', !graph ? '当前浏览器无法加载三维视图，可以继续从右侧检索和管理。'
-    : !visible.size ? '暂无可显示的记忆。' : '')
-  $('clusters').hidden = groups.length <= 1
-  $('clusters').replaceChildren(...groups.map((group, index) => {
-    const btn = element('button', '星区 ' + (index+1) + ' · ' + group.refs.length + ' 条')
-    btn.type = 'button'
-    btn.title = visible.get(group.center)?.preview ?? ''
-    btn.addEventListener('click', () => select(group.center, true))
-    return btn
-  }))
-  if (first && (data.mode === 'recall' || data.total === 1) && data.records.length) {
-    select(groups[0]?.center ?? data.records[0].ref, data.mode === 'recall')
-  } else if (!visible.has(selected)) {
-    selected = undefined
-    closeDetail()
-    graph?.reset()
-  } else if (detail) {
-    renderRelated(detail.ref)
-  }
+  graph?.highlights(inResults ? data.highlights ?? [] : [])
 }
 
 async function refresh({ first = false } = {}) {
   const request = ++requestId
+  const priorDetail = detailId
   const current = tab
   const params = current === 'saved' ? new URLSearchParams({ favorites: '1' }) : new URLSearchParams(filters)
   params.set('limit', pageSize)
+  if (current === 'results' && params.get('q')) params.set('highlights', '1')
   params.set('offset', pages[current] * pageSize)
   message('message', '')
   $('refresh').disabled = true
@@ -202,10 +186,19 @@ async function refresh({ first = false } = {}) {
       await refresh({ first })
       return
     }
-    const atlasParams = new URLSearchParams()
-    for (const record of data.records) atlasParams.append('ref',record.ref)
-    const atlas = await api('/api/atlas?' + atlasParams)
-    if (request === requestId) render(data,atlas,first)
+    render(data)
+    if (graph && params.get('tools') === '1' && data.highlights?.length) {
+      const missing = data.highlights.filter(ref => !points.has(ref))
+      const batches = [missing.slice(0, 50), missing.slice(50, 100)].filter(batch => batch.length)
+      const additions = await Promise.all(batches.map(batch => {
+        const refs = new URLSearchParams({ neighbors: '0' })
+        for (const ref of batch) refs.append('ref', ref)
+        return readNeighborhood(refs)
+      }))
+      if (request !== requestId) return
+      includeRecords(additions.filter(addition => addition?.revision === overviewRevision).flatMap(addition => addition.records))
+    }
+    if (first && priorDetail === detailId && data.records.length) select(data.records[0].ref, data.mode === 'recall')
   } catch (error) {
     if (request === requestId) message('message', error.message)
   } finally {
@@ -222,19 +215,15 @@ function focus(ref, wide) {
   }
 }
 
-function renderRelated(ref) {
-  const near = relations.filter(edge => edge.source === ref || edge.target === ref)
-    .sort((a,b) => Number(Boolean(b.evidence)) - Number(Boolean(a.evidence)) || b.weight - a.weight)
-    .slice(0,6)
-  $('related').hidden = !near.length
-  $('related-items').replaceChildren(...near.map(edge => {
+function renderRelated(ref, relations, records) {
+  const index = new Map(records.map(record => [record.ref, record]))
+  $('related').hidden = !relations.length
+  $('related-items').replaceChildren(...relations.map(edge => {
     const other = edge.source === ref ? edge.target : edge.source
-    const label = edge.kind === 'reference' ? edge.source === ref ? '引用原话' : '被引用'
-      : edge.kind === 'turn' ? '同一轮次' : '词面相近'
+    const label = edge.kind === 'reference' ? edge.source === ref ? '引用原话' : '被引用' : '同一轮次'
     const button = element('button', undefined, 'relation')
     button.type = 'button'
-    button.append(element('span', label + ' · ' + other), element('span', visible.get(other)?.preview || other, 'preview'))
-    if (edge.terms?.length) button.title = '共同词片段 ' + edge.terms.join('、')
+    button.append(element('span', label + ' · ' + other), element('span', index.get(other)?.preview || other, 'preview'))
     button.addEventListener('click', () => select(other))
     const item = element('li')
     item.append(button)
@@ -245,11 +234,15 @@ function renderRelated(ref) {
 function closeDetail() {
   detailId += 1
   detail = undefined
+  selected = undefined
   $('details').hidden = true
+  for (const button of $('items').querySelectorAll('[aria-pressed]')) button.setAttribute('aria-pressed', 'false')
+  graph?.reset()
 }
 
 function showRecord(record) {
   detail = record
+  $('detail-source').textContent = recordClass(record)
   $('original').textContent = record.text
   $('original').scrollTop = 0
   $('favorite').textContent = record.saved ? '取消收藏' : '收藏'
@@ -264,8 +257,6 @@ function showRecord(record) {
 }
 
 async function select(ref, wide = false) {
-  const record = visible.get(ref)
-  if (!record) return
   const request = ++detailId
   selected = ref
   detail = undefined
@@ -273,23 +264,35 @@ async function select(ref, wide = false) {
     button.setAttribute('aria-pressed', String(button.dataset.ref === ref))
   }
   $('details').hidden = false
-  $('detail-source').textContent = recordClass(record)
+  $('detail-source').textContent = ref
   $('original').textContent = ''
   $('metadata').replaceChildren()
   $('favorite').disabled = true
   $('copy').disabled = true
   message('detail-message', '正在读取原话…')
   $('details').parentElement.scrollTop = 0
-  renderRelated(ref)
-  focus(ref, wide)
-  try {
-    const data = await api('/api/record?' + new URLSearchParams({ ref }))
+  renderRelated(ref, [], [])
+  graph?.neighbors([])
+  if (points.has(ref)) focus(ref, wide)
+  const params = new URLSearchParams({ ref })
+  const original = api('/api/record?' + params).then(data => {
     if (request !== detailId) return
     showRecord(data)
     message('detail-message', '')
-  } catch (error) {
+  }).catch(error => {
     if (request === detailId) message('detail-message', error.message)
-  }
+  })
+  const neighborhood = readNeighborhood(params).then(snapshot => {
+    if (request !== detailId || !snapshot || graph && snapshot.revision !== overviewRevision) return
+    includeRecords(snapshot.records)
+    if (!snapshot.records.some(record => record.ref === ref)) return
+    graph?.neighbors(snapshot.relations)
+    renderRelated(ref, snapshot.relations, snapshot.records)
+    if (graph && points.has(ref)) focus(ref, wide)
+  }).catch(error => {
+    if (request === detailId) message('message', '证据关系加载失败 · ' + error.message)
+  })
+  await Promise.all([original, neighborhood])
 }
 
 function setTab(next) {
@@ -309,19 +312,18 @@ $('search').addEventListener('submit', event => {
   if ($('tools').checked) filters.set('tools', '1')
   pages.results = 0
   closeDetail()
-  selected = undefined
+  graph?.highlights([])
   refresh({ first: Boolean(filters.get('q')) })
 })
 $('previous').addEventListener('click', () => { pages[tab] -= 1; refresh() })
 $('next').addEventListener('click', () => { pages[tab] += 1; refresh() })
-$('refresh').addEventListener('click', () => {
-  refresh()
-  if ($('all-points').checked) refreshOverview()
+$('refresh').addEventListener('click', async () => {
+  await Promise.all([refresh(), loadGalaxy()])
+  if (selected) select(selected)
 })
-$('all-points').addEventListener('change', refreshOverview)
 $('zoom-in').addEventListener('click', () => graph?.zoom(1.23))
 $('zoom-out').addEventListener('click', () => graph?.zoom(1 / 1.23))
-$('reset').addEventListener('click', () => graph?.reset())
+$('reset').addEventListener('click', () => { graph?.highlights([]); closeDetail() })
 $('links').addEventListener('change', event => graph?.links(event.target.checked))
 $('close-detail').addEventListener('click', closeDetail)
 $('focus').addEventListener('click', () => { if (selected) focus(selected) })
@@ -353,7 +355,4 @@ $('copy').addEventListener('click', async () => {
   }
 })
 refresh()
-if (graph && new URLSearchParams(location.search).get('all') === '1') {
-  $('all-points').checked = true
-  refreshOverview()
-}
+loadGalaxy()

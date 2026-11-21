@@ -8,7 +8,8 @@ import { coverage } from '../coverage.mjs'
 import { writeStreams } from '../eval-recall.mjs'
 import { loadAll, parseRef, readAt, recall, refOf, trace } from '../recall.mjs'
 import { repoRoot, streams } from '../repo.mjs'
-import { createAtlasStore } from './atlas.mjs'
+import { buildAtlas, galaxyRadius, indexRelations } from './atlas.mjs'
+import { randomFrom } from './graph-data.mjs'
 import { sha256 } from '../../tools/mem-journal.mjs'
 
 const host = '127.0.0.1'
@@ -22,11 +23,11 @@ const staticFiles = new Map([
   ['/app.js', ['app.js', 'text/javascript']],
   ['/graph-data.mjs', ['graph-data.mjs', 'text/javascript']],
   ['/graph-view.mjs', ['graph-view.mjs', 'text/javascript']],
-  ['/sphere.mjs', ['sphere.mjs', 'text/javascript']],
-  ['/star-field.mjs', ['star-field.mjs', 'text/javascript']],
+  ['/gaia-star-shaders.mjs', ['gaia-star-shaders.mjs', 'text/javascript']],
+  ['/gaia-sky-MPL-2.0.txt', ['gaia-sky-MPL-2.0.txt', 'text/plain']],
 ])
 const recallLimit = 100
-const sceneLimit = 360
+const neighborhoodLimit = 12
 
 class RequestError extends Error {
   constructor(status, message) {
@@ -39,8 +40,7 @@ function response(res, status, data, type = 'application/json') {
   res.writeHead(status, {
     'Content-Type': `${type}; charset=utf-8`,
     'Cache-Control': 'no-store',
-    // Allow only the pinned graph bundle's generated stylesheets, including the empty style elements at creation.
-    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self' 'sha256-yfc2FhpkFR0EAy3T+zDsaAFGXSP9B3ELNvaJKDzNhkk=' 'sha256-0/4q5IwejFb2zgHlQwwtwmGHS8ZbXE1kmz/TkRFlZ7M=' 'sha256-9xjtvxMT1ApHlgn9ohbh2FNfvK5Tqtzy94BjfXBeMSY=' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
   })
@@ -127,26 +127,6 @@ function recent({ source, withTools }) {
     .sort((a, b) => b.ts - a.ts || b.line - a.line)
 }
 
-function sceneSample(records, project = projectRecord) {
-  const bySource = new Map()
-  for (const record of records) {
-    let group = bySource.get(record.source)
-    if (!group) {
-      group = []
-      bySource.set(record.source, group)
-    }
-    if (group.length < sceneLimit) group.push(record)
-  }
-  const sample = []
-  for (let index = 0; sample.length < Math.min(records.length, sceneLimit); index += 1) {
-    for (const group of bySource.values()) {
-      if (group[index]) sample.push(project(group[index]))
-      if (sample.length === sceneLimit) break
-    }
-  }
-  return sample
-}
-
 function listRecords(params, file, now) {
   const query = params.get('q') ?? ''
   const source = params.get('source') || null
@@ -188,69 +168,80 @@ function listRecords(params, file, now) {
     records = recent({ source, withTools })
   }
   return {
-    ...(params.get('scene') === '1' && !query ? { scene: sceneSample(records) } : {}),
+    ...(query && params.get('highlights') === '1' ? { highlights: records.slice(0, recallLimit).map(refOf) } : {}),
     mode: reference ? 'reference' : query ? mode : 'browse',
     total: records.length, atRecallLimit: !!query && mode === 'recall' && records.length === recallLimit,
     records: records.slice(offset, offset + limit).map(record => projectRecord(record)), unavailable,
   }
 }
 
-function createAtlasReader(file) {
-  const store = createAtlasStore(file)
+function createAtlasReader() {
   let priorStamp
-  let all = new Map()
-  let base = []
-  let browsable = []
+  let index
+  let relations
+  let positions
   let overviewPoints
+  let revision = 0
+
+  function reload() {
+    const stamp = JSON.stringify(streams().list.map(entry => {
+      const stat = fs.statSync(entry.path, { throwIfNoEntry: false })
+      return [entry.path, stat?.size, stat?.mtimeMs, stat?.ctimeMs]
+    }))
+    if (stamp === priorStamp) return
+    const { records } = loadAll({ withTools: true, withProvenance: true })
+    const entries = records.map(record => ({ ...record, ref: refOf(record) }))
+    const identity = (record, id) => JSON.stringify([record.store, record.sid, id])
+    const byId = new Map()
+    const bySeq = new Map()
+    for (const record of entries) {
+      if (!record.sid || record.source !== 'opencode') continue
+      if (record.id) byId.set(identity(record, record.id), record.ref)
+      if (record.seq != null) bySeq.set(identity(record, record.seq), record.ref)
+    }
+    for (const record of entries) {
+      if (!record.evidenceIds) continue
+      const references = record.evidenceIds.map(id => byId.get(identity(record, id)))
+      if (record.requestSeq != null) references.push(bySeq.get(identity(record, record.requestSeq)))
+      record.references = references.filter(Boolean)
+    }
+    index = new Map(entries.map(record => [record.ref, record]))
+    relations = indexRelations(entries)
+    const browsable = entries.filter(record => record.kind !== 'tool')
+    positions = buildAtlas(browsable, indexRelations(browsable).layoutEdges)
+    overviewPoints = browsable.map(record => [record.ref, record.source, positions.get(record.ref)])
+    priorStamp = stamp
+    revision += 1
+  }
+
+  function positionFor(ref) {
+    if (positions.has(ref)) return positions.get(ref)
+    const near = relations.around(ref)
+      .map(edge => positions.get(edge.source === ref ? edge.target : edge.source)).find(Boolean)
+    const random = randomFrom(ref)
+    return (near ?? [0, 0, 0]).map(value => value + (random() - .5) * (near ? 20 : galaxyRadius))
+  }
+
   return (params, pointsOnly = false) => {
     const refs = [...new Set(params.getAll('ref'))]
     if (refs.length > 50) throw new RequestError(400, '星图补入引用过多')
     for (const ref of refs) recordRef(ref)
-    const stamp = JSON.stringify(streams().list.map(entry => {
-      try {
-        const stat = fs.statSync(entry.path, { throwIfNoEntry: false })
-        return [entry.path, stat?.size, stat?.mtimeMs, stat?.ctimeMs]
-      } catch { return [entry.path] }
-    }))
-    if (stamp !== priorStamp) {
-      const { records } = loadAll({ withTools: true, withProvenance: true })
-      records.sort((a,b) => b.ts - a.ts || b.line - a.line)
-      const entries = records.map(record => ({ ...record, ref: refOf(record) }))
-      const identity = (record, id) => JSON.stringify([record.store, record.sid, id])
-      const byId = new Map()
-      const bySeq = new Map()
-      for (const record of entries) {
-        if (!record.sid || record.source !== 'opencode') continue
-        if (record.id) byId.set(identity(record, record.id), record.ref)
-        if (record.seq != null) bySeq.set(identity(record, record.seq), record.ref)
+    reload()
+    if (pointsOnly) return { points: overviewPoints, revision }
+    const edges = new Map()
+    const shown = new Set(refs.filter(ref => index.has(ref)))
+    if (params.get('neighbors') !== '0') {
+      for (const ref of refs) {
+        for (const edge of relations.around(ref).slice(0, neighborhoodLimit)) {
+          edges.set(JSON.stringify([edge.kind, ...edge.evidence]), edge)
+          shown.add(edge.source)
+          shown.add(edge.target)
+        }
       }
-      for (const record of entries) {
-        if (!record.evidenceIds) continue
-        const references = record.evidenceIds.map(id => byId.get(identity(record, id)))
-        if (record.requestSeq != null) references.push(bySeq.get(identity(record, record.requestSeq)))
-        record.references = [...new Set(references.filter(Boolean))]
-      }
-      all = new Map(entries.map(record => [record.ref, record]))
-      browsable = entries.filter(record => record.kind !== 'tool')
-      base = sceneSample(browsable, record => record.ref)
-      overviewPoints = undefined
-      // Establish the same initial geometry regardless of the first search.
-      store.snapshot(base.map(ref => all.get(ref)))
-      priorStamp = stamp
     }
-    if (pointsOnly) {
-      if (!overviewPoints) {
-        const positions = store.reserveOverview(browsable)
-        overviewPoints = browsable.map(record => [record.ref,record.source,positions.get(record.ref)])
-      }
-      return { points: overviewPoints }
-    }
-    const linked = refs.flatMap(ref => all.get(ref)?.references ?? []).slice(0,24)
-    const active = [...new Set([...base, ...refs, ...linked])].filter(ref => all.has(ref)).map(ref => all.get(ref))
-    const { positions, relations } = store.snapshot(active)
     return {
-      records: active.map(record => ({ ...projectRecord(record), position: positions.get(record.ref) })),
-      basis: 'evidence', relations,
+      records: [...shown].map(ref => ({ ...projectRecord(index.get(ref)), position: positionFor(ref) })),
+      relations: [...edges.values()], revision,
     }
   }
 }
@@ -272,15 +263,19 @@ async function parseBody(req) {
 
 export function createDashboard({ demo = false, now } = {}) {
   const file = path.join(repoRoot(), 'dashboard', 'favorites.json')
-  const readAtlas = createAtlasReader(path.join(path.dirname(file), 'atlas-positions.json'))
+  const readAtlas = createAtlasReader()
   const assets = new Map([...staticFiles].map(([route, [name, type]]) => [
     route, { body: fs.readFileSync(new URL(name, import.meta.url)), type },
   ]))
-  const vendor = new URL('node_modules/3d-force-graph/dist/3d-force-graph.min.js', import.meta.url)
-  if (fs.existsSync(vendor)) assets.set('/vendor/3d-force-graph.js', { body: fs.readFileSync(vendor), type: 'text/javascript' })
-  for (const name of ['three.module.js', 'three.core.js']) {
-    const asset = new URL('node_modules/three/build/' + name, import.meta.url)
-    if (fs.existsSync(asset)) assets.set('/vendor/' + name, { body: fs.readFileSync(asset), type: 'text/javascript' })
+  const threeAssets = [
+    ['three.module.js', 'build/three.module.js'],
+    ['three.core.js', 'build/three.core.js'],
+    ['OrbitControls.js', 'examples/jsm/controls/OrbitControls.js'],
+  ]
+  for (const [name, relative] of threeAssets) {
+    const source = fs.readFileSync(new URL('node_modules/three/' + relative, import.meta.url), 'utf8')
+    const body = name === 'OrbitControls.js' ? source.replace("from 'three'", "from './three.module.js'") : source
+    assets.set('/vendor/' + name, { body, type: 'text/javascript' })
   }
   const server = http.createServer(async (req, res) => {
     const origin = `http://${host}:${server.address().port}`

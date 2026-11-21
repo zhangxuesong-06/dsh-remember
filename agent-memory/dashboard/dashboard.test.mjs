@@ -18,7 +18,7 @@ async function fixture(t) {
   const log = path.join(root, 'codex', 'stream.jsonl')
   await fs.mkdir(path.dirname(log))
   await fs.writeFile(log, [
-    JSON.stringify({ who: 'user', type: 'user/message', sid: 'one', ts: 1000, text: '原始问题' }),
+    JSON.stringify({ who: 'user', type: 'user/message', sid: 'one', turn: 0, ts: 1000, text: '原始问题' }),
     '',
     JSON.stringify({ who: 'assistant', type: 'assistant/message', sid: 'one', ts: 1001, turn: 0, text: original }),
     'malformed',
@@ -122,55 +122,43 @@ test('rejects cross-origin or invalid input and serves only known assets', async
   assert.equal((await request('/')).status, 200)
 })
 
-test('star map mixes adapter sources while searches can still reach older records outside the map', async t => {
+test('full map includes every browsable reference and sends only lightweight positions', async t => {
   const { log, request } = await fixture(t)
   const recent = Array.from({ length: 410 }, (_, i) => JSON.stringify({
     who: 'user', type: 'user/message', sid: 'many', ts: 10000 + i, text: '较新的记录',
   })).join('\n')
   await fs.appendFile(log, recent + '\n')
-  const response = await request('/api/records?scene=1')
-  const { records, scene, total } = await response.json()
-  assert.equal(records.length, 12)
-  assert.equal(scene.length, 360)
-  assert.ok(scene.some(row => row.ref === 'dsh:robot:1'))
-  assert.ok(scene.some(row => row.ref === 'dsh:sim:1'))
-  assert.ok(scene.every(row => !Object.hasOwn(row, 'text')))
-  assert.ok(total > scene.length)
-  assert.ok(!scene.some(row => row.ref === 'codex:3'))
-  const atlas = await (await request('/api/atlas')).json()
-  assert.equal(atlas.records.length, 360)
-  assert.deepEqual(new Set(atlas.records.map(row => row.source)), new Set(['dsh', 'codex']))
-  const allResponse = await request('/api/atlas/points')
-  assert.equal(allResponse.status, 200)
-  const { points } = await allResponse.json()
+  const { total } = await (await request('/api/records')).json()
+  const { points } = await (await request('/api/atlas/points')).json()
   assert.equal(points.length, total)
-  assert.ok(points.every(point => point.length === 3 && point[2].length === 3))
+  assert.ok(points.every(([ref, source, position]) => ref && source && position.length === 3))
   assert.ok(!points.some(([ref]) => ref === 'codex:6'))
   const byRef = new Map(points.map(([ref,,position]) => [ref,position]))
-  for (const record of atlas.records) assert.deepEqual(byRef.get(record.ref), record.position)
-  const focused = await (await request('/api/atlas?ref=codex:3')).json()
-  assert.deepEqual(focused.records.find(row => row.ref === 'codex:3').position, byRef.get('codex:3'))
-  const found = await (await request('/api/records?mode=trace&q=原始答复')).json()
-  assert.deepEqual(found.records.map(row => row.ref), ['codex:3'])
-  assert.equal(found.records[0].sid, 'one')
-  assert.equal(found.records[0].line, 3)
+  assert.ok(byRef.has('dsh:robot:1') && byRef.has('dsh:sim:1') && byRef.has('codex:3'))
+  const scene = await (await request('/api/atlas?ref=codex:3')).json()
+  assert.equal(scene.records.length, 2)
+  assert.deepEqual(scene.records.find(row => row.ref === 'codex:3').position, byRef.get('codex:3'))
+  assert.deepEqual(scene.relations.map(edge => edge.evidence), [['codex:1', 'codex:3']])
+  assert.ok(scene.records.every(row => !Object.hasOwn(row, 'text')))
+  const hits = await (await request('/api/records?mode=trace&q=较新的记录&limit=1&highlights=1')).json()
+  assert.equal(hits.records.length, 1)
+  assert.equal(hits.highlights.length, 100)
+  assert.equal(hits.highlights[0], hits.records[0].ref)
   assert.equal((await request('/graph-data.mjs')).status, 200)
+  assert.equal((await request('/gaia-star-shaders.mjs')).status, 200)
+  assert.equal((await request('/vendor/OrbitControls.js')).status, 200)
+  assert.equal((await request('/vendor/3d-force-graph.js')).status, 404)
 })
 
-test('atlas returns a stable ball and supports canonical reference search', async t => {
+test('tool points can be promoted on demand with canonical reference search', async t => {
   const { request } = await fixture(t)
-  const first = await (await request('/api/atlas')).json()
-  assert.ok(first.records.length > 0)
-  assert.equal(first.basis, 'evidence')
-  assert.equal(first.records.some(row => Object.hasOwn(row, 'text')), false)
   const tool = await (await request('/api/atlas?ref=codex:6')).json()
-  assert.ok(tool.records.some(row => row.ref === 'codex:6'))
-  for (const row of first.records) assert.deepEqual(tool.records.find(item => item.ref === row.ref).position, row.position)
-  const result = await (await request('/api/records?q=codex:3&mode=trace')).json()
+  assert.ok(tool.records.some(row => row.ref === 'codex:6' && row.position.every(Number.isFinite)))
+  const result = await (await request('/api/records?q=codex:3&mode=trace&highlights=1')).json()
   assert.deepEqual(result.records.map(row => row.ref), ['codex:3'])
+  assert.deepEqual(result.highlights, ['codex:3'])
   assert.equal((await request('/api/atlas?ref=dsh:2')).status, 400)
 })
-
 test('derived summary links its stored IDs to physical records and leaves other sessions alone', async t => {
   const { request, root } = await fixture(t)
   const dir = path.join(root,'opencode')
@@ -183,7 +171,7 @@ test('derived summary links its stored IDs to physical records and leaves other 
       sourceIDs:['answer-id','other-id','missing-id'], source:{type:'derived.observation'} },
   ]
   await fs.writeFile(path.join(dir,'stream.jsonl'),records.map(record => JSON.stringify(record)).join('\n'))
-  const atlas = await (await request('/api/atlas')).json()
+  const atlas = await (await request('/api/atlas?ref=opencode:4')).json()
   const relations = atlas.relations.filter(edge => edge.kind==='reference')
   assert.deepEqual(relations.map(edge=>edge.target).sort(),['opencode:1','opencode:2'])
   const originals = await Promise.all(relations.flatMap(edge=>edge.evidence.map(async ref => {

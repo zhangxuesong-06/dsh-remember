@@ -37,20 +37,20 @@ node agent-memory/install.mjs --harness zcode
 
 ## 本地记忆星图
 
-在仓库根目录一次性安装三维引擎，之后可以离线启动。
+在仓库根目录安装依赖并启动本机服务。
 
 ```powershell
 npm.cmd --prefix agent-memory/dashboard ci --ignore-scripts
+node agent-memory/dashboard/server.mjs
 ```
 
-运行 `node agent-memory/dashboard/server.mjs --demo` 后打开 `http://127.0.0.1:7332/` 试用合成记忆。查看自己的记忆时运行 `node agent-memory/dashboard/server.mjs` 并打开 `http://127.0.0.1:7331/`。需要换端口时使用 `--port=端口号`。按 `Ctrl+C` 停止。
+打开 `http://127.0.0.1:7331/`。需要换端口时使用 `--port=端口号`。按 `Ctrl+C` 停止。
 
-- **球面星图**只由记忆星点和可选证据线组成。空闲时缓慢自转，悬停、手动操作和搜索定位时停转。颜色代表适配器。近处星点更亮，星点密集处光晕更强。新记录入场时，已有星点保持原位。位置保存在同一目录下的 `atlas-positions.json`。
-- **搜索并定位**支持关键词、逐字匹配和来源引用。精确唯一命中时镜头从球外转到记录正面。关键词查找把最强命中区域转到正面，高亮按球面角距和命中顺序减弱，分散主题可从「星区」切换。初始按来源轮选最多 360 条近期记录，搜索和收藏可以补入旧记录。打开右下角「全部记忆」后，其余可浏览记录并入同一片点云，点击星点可读取详情。可用 `http://127.0.0.1:7331/?all=1` 直接打开全量视图。工具记录仍可在查询时通过「工具」选项找到。
-- **证据与近邻**可在记录侧栏回读。选中记忆后，同轮关系与 OpenCode 摘要中已存的引用显示为局部证据线，词面近邻带「词面相近」标记。目前只有可回读的账本证据参与聚集。词面近邻可在侧栏查看，跨会话改述待模型对照评测。
-- **原话和收藏**在右侧面板完成，支持复制引用、收藏、取消收藏和从收藏重新定位。收藏只保存引用和校验指纹，默认位于 `~/.agent-memory/dashboard/favorites.json`，可用 `AGENT_MEMORY_HOME` 改变位置。
+- **三维星团**默认显示全部可浏览的记录。使用 [Code Galaxies](https://github.com/anvaka/pm#your-own-graphs) 的 `ngraph` 三维布局引擎，同轮和显式引用相连的记录成团。每颗星的颜色代表记录来源。空闲时镜头缓慢绕行，悬停、拖拽和定位时暂停。刷新账本会按当前证据重新计算坐标。
+- **搜索并定位**支持关键词、逐字匹配和来源引用。匹配后镜头移到首条记录，其他命中按排名和它们与焦点的三维距离逐渐降亮。可以从搜索结果跳到分散的星点。默认星图省略工具记录，搜索时可勾选「工具」查找并定位它们。
+- **原话和证据**在选中记录后显示。证据线和侧栏指向同轮或显式引用的记录，点开即可回查原话。收藏只保存引用和校验指纹，默认位于 `~/.agent-memory/dashboard/favorites.json`，可用 `AGENT_MEMORY_HOME` 改变位置。
 
-工作台只监听本机回环地址，沿用跨端查询的库路径和环境变量。3D 依赖通过本地服务提供。浏览器缺少 WebGL 2 时，检索和收藏仍可使用。三维引擎采用 [3d-force-graph](https://github.com/vasturiano/3d-force-graph)（MIT）。
+工作台只监听本机回环地址。三维渲染使用本地 Three.js，星点着色器移植自 [Gaia Sky](https://github.com/langurmonkey/gaiasky)，移植文件遵循随附的 [MPL-2.0](agent-memory/dashboard/gaia-sky-MPL-2.0.txt)。浏览器缺少 WebGL 2 时仍可使用检索和收藏。
 
 ## 共同的三条原则
 

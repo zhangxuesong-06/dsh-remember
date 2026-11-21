@@ -15,14 +15,19 @@ export function randomFrom(text) {
   }
 }
 
-export function buildGraph(records, relations) {
-  const nodes = records.map(record => {
-    const [x,y,z] = record.position
-    return { id: record.ref, record, x, y, z, fx:x, fy:y, fz:z }
-  })
-  const positions = new Map(records.map(record => [record.ref, record.position]))
-  const links = relations.filter(edge => edge.evidence).map(edge => ({
-    ...edge, start: positions.get(edge.source), end: positions.get(edge.target),
-  }))
-  return { nodes, links }
+export const pointDistance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+export function starEmphasis(ref, position, { selected, center, ranks, neighbors }) {
+  if (ref === selected) return 2.4
+  const rank = ranks.get(ref)
+  if (rank !== undefined) {
+    const proximity = center ? Math.exp(-pointDistance(position, center) / 95) : 1
+    return (0.36 + 0.94 * proximity) * (0.62 + 0.38 / (1 + rank / 5))
+  }
+  if (neighbors.has(ref)) return .74
+  return center || ranks.size ? .14 : 1
+}
+
+export function canAutoRotate({ enabled, hasRecords, selected, hovered, busy, hidden }) {
+  return enabled && hasRecords && !selected && !hovered && !busy && !hidden
 }

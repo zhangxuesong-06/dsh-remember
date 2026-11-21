@@ -35,22 +35,20 @@ button:enabled:hover, select:hover { background: #282947; }
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 37% 45%, #111a2a 0%, #090f1d 48%, #070912 79%);
+    radial-gradient(ellipse at 37% 42%, #0c1427 0%, #080e1c 36%, #050710 75%);
 }
-#sky, #graph {
+#graph {
   position: absolute;
   display: block;
   inset: 0;
   width: 100%;
   height: 100%;
 }
-#sky { pointer-events: none; }
 #graph { right: calc(var(--dock-width) + var(--dock-edge) + 12px); width: auto; overflow: hidden; }
 #graph canvas { display: block; touch-action: none; }
-#graph .scene-container { position: relative; cursor: url("/orbit-cursor.svg") 12 12, grab; }
-#graph.over-node .scene-container { cursor: url("/node-cursor.svg") 12 12, pointer; }
-#graph.is-dragging .scene-container { cursor: url("/drag-cursor.svg") 12 12, grabbing; }
-#graph .scene-tooltip, #graph .scene-nav-info, #graph .graph-nav-info { display: none; }
+#graph canvas { position: relative; cursor: url("/orbit-cursor.svg") 12 12, grab; }
+#graph.over-node canvas { cursor: url("/node-cursor.svg") 12 12, pointer; }
+#graph.is-dragging canvas { cursor: url("/drag-cursor.svg") 12 12, grabbing; }
 .masthead {
   position: absolute;
   top: 30px;
@@ -75,7 +73,6 @@ button:enabled:hover, select:hover { background: #282947; }
   line-height: 1;
 }
 h1 { font-size: 26px; line-height: 1.08; letter-spacing: .015em; }
-.masthead p { margin-top: 5px; font-size: 12px; color: var(--muted); }
 .demo-tag {
   align-self: start;
   background: #2b2545;
@@ -158,8 +155,8 @@ h1 { font-size: 26px; line-height: 1.08; letter-spacing: .015em; }
 input[type="checkbox"] { accent-color: #b9a5ff; }
 .marker {
   position: absolute;
-  width: 47px;
-  height: 47px;
+  width: 37px;
+  height: 37px;
   transform: translate(-50%, -50%);
   border: 1px solid #ded4ffdd;
   border-radius: 50%;
@@ -320,9 +317,6 @@ input::placeholder { color: #9296b4; }
   .dock-tabs { padding: 0 10px; }
 }
 
-.basis { font-size: 11px; color: #bab6dd; margin-top: 3px; }
-.clusters { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
-.clusters button { color: #dbd2ff; padding: 3px 7px; font-size: 11px; }
 .related { margin-top: 12px; }
 .related h2 { margin: 0 0 6px; font-size: 12px; color: #d8c9f3; }
 .related ul { margin: 0; padding: 0; display: grid; gap: 4px; list-style: none; }
