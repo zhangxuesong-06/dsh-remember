@@ -1,5 +1,6 @@
 import { buildGraph, randomFrom, sources } from './graph-data.mjs'
-import { angularDistance, arcDirection, direction, glowAtAngle, orbitPoint, sphereRadius as R } from './sphere.mjs'
+import { arcDirection, direction, orbitPoint, sphereRadius as R } from './sphere.mjs'
+import { buildStarField, starEmphasis, starVertexShader, starFragmentShader } from './star-field.mjs'
 
 const three = typeof window !== 'undefined' && window.ForceGraph3D
   ? await import('/vendor/three.module.js').catch(() => null) : null
@@ -15,89 +16,91 @@ function paintSky(canvas) {
   if (!ctx) return
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
   const random = randomFrom('quiet-sky')
-  for (let index = 0; index < 560; index += 1) {
+  for (let index = 0; index < 128; index += 1) {
     const x = random() * width
     const y = random() * height
-    const size = .25 + random() ** 6 * 1.4
-    ctx.globalAlpha = .10 + random() * .52
-    ctx.fillStyle = index % 6 === 0 ? '#b6a8ed' : '#a5c0e7'
+    const size = .25 + random() ** 6 * .62
+    ctx.globalAlpha = .08 + random() * .28
+    ctx.fillStyle = '#a5b4cf'
     ctx.beginPath()
     ctx.arc(x, y, size, 0, Math.PI * 2)
     ctx.fill()
   }
 }
 
-function createPointLayer(graph, host, select) {
-  const dot = document.createElement('canvas')
-  dot.width = dot.height = 24
-  const ctx = dot.getContext('2d')
-  const glow = ctx.createRadialGradient(12,12,0,12,12,12)
-  glow.addColorStop(0,'#fff')
-  glow.addColorStop(.38,'#fff')
-  glow.addColorStop(1,'#ffffff00')
-  ctx.fillStyle = glow
-  ctx.fillRect(0,0,24,24)
-  const material = new three.PointsMaterial({
-    size:5, sizeAttenuation:false, map:new three.CanvasTexture(dot),
-    transparent:true, opacity:.64, depthWrite:false, vertexColors:true,
+function createPointLayer(graph, host) {
+  const uniforms = { ambient: { value: 1 }, pixelRatio: { value: graph.renderer().getPixelRatio() } }
+  const material = new three.ShaderMaterial({
+    uniforms, vertexShader: starVertexShader, fragmentShader: starFragmentShader,
+    transparent: true, depthWrite: false, blending: three.AdditiveBlending, vertexColors: true,
   })
-  const cloud = new three.Points(new three.BufferGeometry(),material)
+  const cloud = new three.Points(new three.BufferGeometry(), material)
   cloud.visible = false
-  // Detail meshes use the engine's hit testing; the point layer is tested only on a click.
   cloud.raycast = () => {}
   graph.scene().add(cloud)
-  let rows = []
-  let pickable = []
-  const tmp = new three.Vector3()
+  let stars = []
+  const projected = new three.Vector3()
+  const radial = new three.Vector3()
 
-  graph.onBackgroundClick(event => {
-    if (!pickable.length) return
+  function pick(event) {
+    if (!stars.length) return null
     const rect = host.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
-    let closest
-    let distance = 36
-    let depth = 1
     const camera = graph.camera()
-    for (const [ref,,position] of pickable) {
-      tmp.set(...position).project(camera)
-      if (tmp.z < -1 || tmp.z > 1) continue
-      const dx = (tmp.x+1)*rect.width/2 - x
-      const dy = (1-tmp.y)*rect.height/2 - y
-      const squared = dx*dx + dy*dy
-      if (squared < distance || (squared === distance && tmp.z < depth)) {
+    const view = radial.copy(camera.position).normalize()
+    const emphasis = cloud.geometry.getAttribute('emphasis')
+    let closest = null
+    let best = Infinity
+    for (let i = 0; i < stars.length; i++) {
+      const { ref, position } = stars[i]
+      projected.set(...position).project(camera)
+      if (Math.abs(projected.z) > 1) continue
+      const dx = (projected.x + 1) * rect.width / 2 - x
+      const dy = (1 - projected.y) * rect.height / 2 - y
+      const squared = dx * dx + dy * dy
+      const limit = 5 + 3 * emphasis.getX(i)
+      if (squared > limit * limit) continue
+      const facing = (position[0] * view.x + position[1] * view.y + position[2] * view.z) / R
+      // Favor visible front stars when projections almost overlap.
+      const rank = squared + 8 * (1 - facing)
+      if (rank < best) {
+        best = rank
         closest = ref
-        distance = squared
-        depth = tmp.z
       }
     }
-    if (closest) select(closest)
-  })
+    return closest
+  }
 
-  function update(byRef) {
-    pickable = rows.filter(([ref])=>!byRef.has(ref))
-    const positions = new Float32Array(pickable.length * 3)
+  function set(records, overview) {
+    stars = buildStarField(records, overview)
+    const positions = new Float32Array(stars.length * 3)
     const colors = new Float32Array(positions.length)
-    const color = new three.Color()
-    let colorIndex = 0
-    for (const [,source,coords] of pickable) {
-      const i = colorIndex
-      positions.set(coords,i)
-      color.set(sources[source].color).toArray(colors,i)
-      colorIndex += 3
-    }
+    const palette = Object.fromEntries(Object.entries(sources).map(([source, { color }]) => [source, new three.Color(color)]))
+    stars.forEach(({ source, position }, i) => {
+      positions.set(position, i * 3)
+      palette[source].toArray(colors, i * 3)
+    })
     const geometry = new three.BufferGeometry()
-      .setAttribute('position',new three.BufferAttribute(positions,3))
-      .setAttribute('color',new three.BufferAttribute(colors,3))
+      .setAttribute('position', new three.BufferAttribute(positions, 3))
+      .setAttribute('color', new three.BufferAttribute(colors, 3))
+      .setAttribute('spark', new three.Float32BufferAttribute(stars.map(star => star.spark), 1))
+      .setAttribute('density', new three.Float32BufferAttribute(stars.map(star => star.density), 1))
+      .setAttribute('emphasis', new three.BufferAttribute(new Float32Array(stars.length), 1).setUsage(three.DynamicDrawUsage))
     cloud.geometry.dispose()
     cloud.geometry = geometry
-    cloud.visible = Boolean(pickable.length)
+    cloud.visible = Boolean(stars.length)
   }
-  return {
-    update,
-    set(points, byRef) { rows = points; update(byRef) },
-    dim(focused) { material.opacity = focused ? .24 : .64 },
+
+  function style(focus) {
+    uniforms.ambient.value = focus.selected || focus.ranks.size ? .32 : 1
+    if (!stars.length) return
+    const attribute = cloud.geometry.getAttribute('emphasis')
+    stars.forEach((star, i) => attribute.setX(i, starEmphasis(star, focus)))
+    attribute.needsUpdate = true
   }
+
+  return { set, style, pick }
 }
 
 export function canAutoRotate({ enabled, hasRecords, selected, hovered, busy, hidden }) {
@@ -124,11 +127,14 @@ export function createGraph(host, background, marker, rotation, select, selectLi
 
   let byRef = new Map()
   let selected = null
-  let matches = null
+  let ranks = new Map()
+  let records = []
+  let overview = []
+  let evidence = new Map()
+  let drawnEdges
   let markerFrame = 0
   let flight = 0
   let linksEnabled = true
-
 
   let hovered = null
   let dragging = false
@@ -138,21 +144,20 @@ export function createGraph(host, background, marker, rotation, select, selectLi
   graph.backgroundColor('rgba(0,0,0,0)')
     .showNavInfo(false)
     .enableNodeDrag(false)
-    .nodeLabel(() => '')
-    .linkLabel(() => '')
-    .nodeRelSize(2.82)
-    .nodeOpacity(.98)
-    .nodeResolution(12)
-    .linkThreeObject(makeArc)
-    .linkPositionUpdate(() => true)
+    .nodeVisibility(false)
     .cooldownTicks(0)
     .showPointerCursor(false)
-    .onNodeHover(node => showHover(node?.id))
-    .onNodeClick(node => select(node.id))
 
   const renderer = graph.renderer()
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
-  const pointLayer = createPointLayer(graph,host,selectLightPoint)
+  const pointLayer = createPointLayer(graph, host)
+  const evidenceLayer = new three.Group()
+  evidenceLayer.name = 'memory-evidence'
+  graph.scene().add(evidenceLayer)
+  graph.onBackgroundClick(event => {
+    const ref = pointLayer.pick(event)
+    if (ref) (byRef.has(ref) ? select : selectLightPoint)(ref)
+  })
   const controls = graph.controls()
   controls.minDistance = R + 65
   controls.maxDistance = 4700
@@ -160,8 +165,10 @@ export function createGraph(host, background, marker, rotation, select, selectLi
 
   function makeArc(edge) {
     const points = Array.from({ length: 21 }, (_,i) => new three.Vector3(...arcDirection(edge.start,edge.end,i/20).map(value => value * (R+1.5))))
-    return new three.Line(new three.BufferGeometry().setFromPoints(points),
-      new three.LineBasicMaterial({ color: edge.kind === 'reference' ? '#eacd94' : '#b1a5ff', transparent:true, opacity:.55 }))
+    const line = new three.Line(new three.BufferGeometry().setFromPoints(points),
+      new three.LineBasicMaterial({ color: edge.kind === 'reference' ? '#eacd94' : '#a1b4df', transparent:true, opacity:.46, depthWrite:false }))
+    line.raycast = () => {}
+    return line
   }
   // OrbitControls expresses speed in rotations per minute.
   controls.autoRotateSpeed = .24
@@ -185,7 +192,8 @@ export function createGraph(host, background, marker, rotation, select, selectLi
   }
 
   function showHover(ref) {
-    hovered = byRef.has(ref) ? ref : null
+    if (ref === hovered) return
+    hovered = ref
     host.classList.toggle('over-node', Boolean(hovered))
     syncRotation()
   }
@@ -193,6 +201,7 @@ export function createGraph(host, background, marker, rotation, select, selectLi
   controls.addEventListener('start', () => {
     stopFlight()
     dragging = true
+    showHover(null)
     host.classList.add('is-dragging')
     syncRotation()
   })
@@ -201,7 +210,22 @@ export function createGraph(host, background, marker, rotation, select, selectLi
     host.classList.remove('is-dragging')
     pauseFor(3500)
   })
-  host.addEventListener('pointerleave', () => showHover(null))
+  let hoverFrame = 0
+  let pointer
+  host.addEventListener('pointermove', event => {
+    if (dragging || event.pointerType === 'touch') return
+    pointer = event
+    if (hoverFrame) return
+    hoverFrame = requestAnimationFrame(() => {
+      hoverFrame = 0
+      showHover(dragging ? null : pointLayer.pick(pointer))
+    })
+  })
+  host.addEventListener('pointerleave', () => {
+    cancelAnimationFrame(hoverFrame)
+    hoverFrame = 0
+    showHover(null)
+  })
   rotation.addEventListener('change', () => {
     rotationOverride = rotation.checked
     syncRotation()
@@ -242,9 +266,7 @@ export function createGraph(host, background, marker, rotation, select, selectLi
   }
 
   function reset(ms = duration()) {
-    const dock = document.querySelector('.dock')
-    const inset = matchMedia('(max-width: 760px)').matches ? 0 : 2 * (dock.offsetWidth + 38)
-    const fit = Math.max(220, Math.min(host.clientHeight,host.clientWidth - inset))
+    const fit = Math.max(220, Math.min(host.clientHeight, host.clientWidth - 36))
     const distance = Math.min(4250, Math.max(825, 780 * host.clientHeight / fit))
     orbitTo([.08,.12,1],distance,ms)
   }
@@ -257,17 +279,19 @@ export function createGraph(host, background, marker, rotation, select, selectLi
   resize()
 
   function style() {
-    pointLayer.dim(Boolean(matches || selected))
     const center = byRef.get(selected)?.record.position
-    const brightness = node => !matches ? 1 : matches.has(node.id)
-      ? center ? glowAtAngle(angularDistance(center, node.record.position)) : .8 : .14
-    graph.nodeVal(node => node.id === selected ? 14 : 1.35 + (matches?.has(node.id) ? 4 * brightness(node) : 0))
-      .nodeColor(node => new three.Color(sources[node.record.source].color).multiplyScalar(brightness(node)).getStyle())
-      .linkVisibility(edge => {
-        const source = edge.source?.id ?? edge.source
-        const target = edge.target?.id ?? edge.target
-        return linksEnabled && (!selected || source === selected || target === selected)
-      })
+    const edges = evidence.get(selected)
+    const neighbors = new Set(edges?.map(edge => edge.source === selected ? edge.target : edge.source))
+    pointLayer.style({ selected, center, ranks, neighbors })
+    const visible = linksEnabled ? edges : undefined
+    if (visible === drawnEdges) return
+    for (const line of evidenceLayer.children) {
+      line.geometry.dispose()
+      line.material.dispose()
+    }
+    evidenceLayer.clear()
+    for (const edge of visible ?? []) evidenceLayer.add(makeArc(edge))
+    drawnEdges = visible
   }
 
   function moveMarker() {
@@ -291,16 +315,26 @@ export function createGraph(host, background, marker, rotation, select, selectLi
   }
 
   return {
-    setRecords(records, relations, hitRefs = null) {
-      matches = hitRefs ? new Set(hitRefs) : null
+    setRecords(nextRecords, relations, hitRefs) {
+      ranks = new Map((hitRefs ?? []).map((ref, i) => [ref, i]))
+      records = nextRecords
       const data = buildGraph(records, relations)
+      evidence = new Map()
+      for (const edge of data.links) for (const ref of [edge.source, edge.target]) {
+        if (!evidence.has(ref)) evidence.set(ref, [])
+        evidence.get(ref).push(edge)
+      }
       byRef = new Map(data.nodes.map(node => [node.id, node]))
-      graph.graphData(data)
-      pointLayer.update(byRef)
+      graph.graphData({ nodes: data.nodes, links: [] })
+      pointLayer.set(records, overview)
       style()
-      showHover(hovered)
+      syncRotation()
     },
-    setOverviewPoints(points) { pointLayer.set(points,byRef) },
+    setOverviewPoints(points) {
+      overview = points
+      pointLayer.set(records, overview)
+      style()
+    },
     focus(ref, wide = false) {
       const node = byRef.get(ref)
       if (!node) return

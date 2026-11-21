@@ -23,6 +23,7 @@ const staticFiles = new Map([
   ['/graph-data.mjs', ['graph-data.mjs', 'text/javascript']],
   ['/graph-view.mjs', ['graph-view.mjs', 'text/javascript']],
   ['/sphere.mjs', ['sphere.mjs', 'text/javascript']],
+  ['/star-field.mjs', ['star-field.mjs', 'text/javascript']],
 ])
 const recallLimit = 100
 const sceneLimit = 360

@@ -28,16 +28,14 @@ button:enabled:hover, select:hover { background: #282947; }
   min-height: 600px;
   height: 100dvh;
   overflow: hidden;
+  --dock-width: 354px;
+  --dock-edge: 23px;
 }
 .stage {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 32% 57%, #241745a6, transparent 43%),
-    radial-gradient(ellipse at 56% 36%, #15334c99, transparent 43%),
-    radial-gradient(ellipse at 21% 30%, #12323a65, transparent 40%),
-    radial-gradient(ellipse at 60% 76%, #4222456b, transparent 37%),
-    #080a17;
+    radial-gradient(ellipse at 37% 45%, #111a2a 0%, #090f1d 48%, #070912 79%);
 }
 #sky, #graph {
   position: absolute;
@@ -47,7 +45,7 @@ button:enabled:hover, select:hover { background: #282947; }
   height: 100%;
 }
 #sky { pointer-events: none; }
-#graph { overflow: hidden; }
+#graph { right: calc(var(--dock-width) + var(--dock-edge) + 12px); width: auto; overflow: hidden; }
 #graph canvas { display: block; touch-action: none; }
 #graph .scene-container { position: relative; cursor: url("/orbit-cursor.svg") 12 12, grab; }
 #graph.over-node .scene-container { cursor: url("/node-cursor.svg") 12 12, pointer; }
@@ -183,9 +181,9 @@ input[type="checkbox"] { accent-color: #b9a5ff; }
 .dock {
   position: absolute;
   top: 23px;
-  right: 23px;
+  right: var(--dock-edge);
   bottom: 23px;
-  width: 354px;
+  width: var(--dock-width);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -297,13 +295,14 @@ input::placeholder { color: #9296b4; }
 .refresh { margin-left: auto; padding: 4px 8px; color: #d2cdeb; font-size: 11px; }
 
 @media (max-width: 1050px) {
-  .dock { right: 14px; width: 315px; }
+  .atlas { --dock-width: 315px; --dock-edge: 14px; }
   .controls { right: 345px; bottom: 112px; }
   .graph-key { max-width: calc(100% - 550px); }
 }
 @media (max-width: 760px) {
   .atlas { height: auto; min-height: 100dvh; overflow: visible; }
   .stage { position: relative; height: clamp(320px, 50svh, 550px); }
+  #graph { right: 0; }
   .dock { position: relative; inset: auto; width: auto; margin: 0 9px 9px; max-height: 660px; }
   .masthead { left: 13px; top: 12px; gap: 8px; }
   .brand-mark { width: 38px; height: 38px; border-radius: 11px; font-size: 23px; }
