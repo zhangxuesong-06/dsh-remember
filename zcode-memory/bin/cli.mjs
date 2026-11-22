@@ -1,9 +1,10 @@
 // 人工核对入口：不用开会话也能看库、验账、回读。
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { HOME } from '../lib/config.mjs'
+import { HOME, loadCfg } from '../lib/config.mjs'
 import { Ledger } from '../lib/store.mjs'
-import { recallBlock, traceBlock } from '../lib/assemble.mjs'
+import { recallBlock, ledgerQuotes, traceBlock } from '../lib/assemble.mjs'
+import { recallFlags, serializeRange } from '../lib/mem-recall.mjs'
 import { readBlob } from '../lib/evidence.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
@@ -36,9 +37,9 @@ function usage() {
   verify               校验账本（OK / BAD，BAD 时退出码 1）
   sync                 把当前内容接纳为基线
   replay               从工具结果补写缺失的产物记录
-  show <段号>          回读某一段的原文
+  show <行号> [--range start:end]  回读记录原文
   read <sha256>        回读证据 blob
-  recall <query>       按意思查
+  recall <query> [--compact] [--rank passage]  按线索查
   trace <query>        按字核对`)
 }
 
@@ -92,8 +93,13 @@ try {
     }
     case 'show': {
       const id = Number(rest[0])
-      if (!Number.isInteger(id)) throw new Error('show 需要段号')
-      console.log(ledger().fullText(id))
+      if (!Number.isInteger(id)) throw new Error('show 需要记录行号')
+      const db = ledger()
+      if (rest[1] === '--range') {
+        const rec = db.fullRecord(id)
+        if (!rec) throw new Error('没有这条记录。')
+        console.log(serializeRange(rec, String(id), rest[2]))
+      } else console.log(db.fullText(id))
       break
     }
     case 'read': {
@@ -102,9 +108,11 @@ try {
       break
     }
     case 'recall': {
-      const query = rest.join(' ').trim()
+      const { words, compact, passages } = recallFlags(rest)
+      const query = words.join(' ').trim()
       if (!query) throw new Error('recall 需要一句话')
-      console.log(recallBlock(ledger(), { query }) || '没找到。')
+      const db = ledger()
+      console.log(compact || passages ? ledgerQuotes(db, query, { passages, recency: loadCfg().recency }) : recallBlock(db, { query }) || '没找到。')
       break
     }
     case 'trace': {

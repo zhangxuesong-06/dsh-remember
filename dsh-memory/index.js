@@ -32,13 +32,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { Ledger } from './lib/store.mjs'
+import { serializeRange } from './lib/mem-recall.mjs'
 import {
   loadCfg, workspaceDir, workspaceLine, diag, SESSIONS_DIR, CFG_PATH,
 } from './lib/config.mjs'
 import { eventToRecords, setCaptureLog, setCaptureHuman } from './lib/capture.mjs'
 import { backfill } from './lib/backfill.mjs'
 import { isSubagent, filterSubagentRecords } from './lib/subagent.mjs'
-import { anchorBlock, anchorCutoff, primingBlock, emotionCueBlock, recallBlock, traceBlock, factsBlock, arrivalBlock, dayOf, selfLines, strengthOf, sid8, lineOfDoc } from './lib/assemble.mjs'
+import { anchorBlock, anchorCutoff, primingBlock, emotionCueBlock, recallBlock, ledgerQuotes, traceBlock, factsBlock, arrivalBlock, dayOf, selfLines, strengthOf, sid8, lineOfDoc } from './lib/assemble.mjs'
 import { search } from './lib/retrieve.mjs'
 import { readBlob } from './lib/evidence.mjs'
 import { topicKey, tokenize } from './lib/tokenize.mjs'
@@ -552,6 +553,8 @@ function recallTool(ledger, cfg, sid) {
         when: { type: 'string', description: '按日期找，例如 2026-10-24。' },
         episode: { type: 'number', description: '预激活里那个编号，直接翻那一段。' },
         full: { type: 'boolean', description: '要全文：默认单条超过 300 字会截成「头 210 + …… + 尾 70」，这一步不截。' },
+        passage: { type: 'boolean', description: '按原文窗口排名，返回紧凑摘录。' },
+        compact: { type: 'boolean', description: '只返回限量摘录、角色和原文位置。' },
       },
       additionalProperties: false,
     },
@@ -571,6 +574,9 @@ function recallTool(ledger, cfg, sid) {
 
       const query = String(a.query || '').trim()
       const when = String(a.when || '').trim()
+      if (query && !full && (a.passage || a.compact)) {
+        return { text: ledgerQuotes(ledger, query, { passages: a.passage, when, recency: cfg.recency }) }
+      }
 
       if (when) {
         const dayEps = ledger.episodes.filter((e) => dayOf(e.startTs) === when || dayOf(e.endTs) === when)
@@ -773,6 +779,7 @@ function readTool(ledger, cfg) {
         ref: { type: 'string', description: '记录 ID 或 64 位证据哈希。' },
         offset: { type: 'number', description: '从第几个字符开始，默认 0。' },
         limit: { type: 'number', description: '最多返回多少字符，默认 12000，最多 24000。' },
+        range: { type: 'string', description: '摘录的 UTF-16 start:end，原样回读。' },
       },
       additionalProperties: false,
     },
@@ -792,6 +799,10 @@ function readTool(ledger, cfg) {
         rec = ledger.rows().find((r) => r.id === ref) || null
       }
       if (!rec) return { text: '（没有这条记录。）' }
+      if (a.range !== undefined) {
+        try { return { text: serializeRange(rec, Number.isInteger(a.id) ? String(a.id) : ref, a.range) } }
+        catch (error) { return { text: error.message } }
+      }
       const start = Math.max(0, Number(a.offset) || 0)
       const size = Math.max(1, Math.min(24000, Number(a.limit) || 12000))
       const text = String(rec.text || '')

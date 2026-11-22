@@ -56,6 +56,8 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 | `memory_stats` | 看一眼库：多少句、多少段、多大、账本状态 |
 | `memory_read` | 按行号/ID 读完整原文，或按证据哈希读工具输出/文件版本 |
 
+只需少量原文时用 `recall` 的 `compact: true`。记得长回复里的具体措辞时用 `passage: true`。把摘录的 `ref` 和 `start:end` 传给 `memory_read` 的 `ref` 和 `range` 可逐字回读。CLI 对应 `recall <工作区> "线索" --compact --rank passage` 和 `show <工作区> <行号> --range start:end`。
+
 **`recall` 管意思，`trace` 管归属。** 问「你是不是答应过我」只认 `trace` 里「他说的」那一类。
 
 命令行也能核对：

@@ -42,7 +42,7 @@ agent_created: true
 
 ## 什么时候必须主动翻
 
-- 用户提到过去：「上次」「之前」「还记得吗」「你答应过」→ `recall`，别凭印象答。
+- 回想旧事用 `recall "线索" --compact`。记得长回复里的具体措辞时加 `--rank passage`。按摘录的 `ref`、`start`、`end` 用 `show <ref> --range start:end` 回读原话。
 - 要核实某句原话是谁说的、说没说 → `trace`（按字查，一字不差）。
 - 接着上一个会话的活干 → `arrive` 看最近几段，再 `recall #N` 拿原话。
 - 用户说「记住这个」→ `remember`，写进 `marks.jsonl`，醒来时会带上。

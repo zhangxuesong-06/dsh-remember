@@ -28,6 +28,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { atomicWrite, createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs, resolveRoot } from './mem-evidence.mjs'
 import { buildIndex, appendIndex, searchIndex, indexStore, episodesByIds, indexBuiltAt, indexFresh } from './mem-index.mjs'
+import { compactLimit, compactQuotes, compactRecall, recallFlags, serializeRange } from './mem-recall.mjs'
 
 // 库根走 mem-evidence.resolveRoot：hook、CLI、维护进程共用同一个判断。
 const ROOT = resolveRoot()
@@ -311,7 +312,7 @@ function remember(cwd, text, key) {
 
 // ————————————————————— 读流、切段 —————————————————————
 
-function openStore() {
+function openStore({ quotesOnly = false } = {}) {
   let txt = ''
   try { txt = readFileSync(STREAM, 'utf8') } catch { return null }
   const ends = txt.endsWith('\n')
@@ -329,7 +330,7 @@ function openStore() {
     const line = lines[i]
     let rec = null
     if (line.trim()) { try { rec = JSON.parse(line) } catch {} }
-    records.push(rec || null)
+    if (!quotesOnly) records.push(rec || null)
     if (!rec) { docs.push(null); docLen.push(1); totalLen += 1; continue }
     const d = {
       i,
@@ -343,6 +344,7 @@ function openStore() {
       text: String(rec.text || ''),
     }
     docs.push(d)
+    if (quotesOnly) continue
     let len = 0
     for (const [term, tf] of termFreq(d.text.slice(0, INDEX_CHARS))) {
       let arr = postings.get(term)
@@ -354,6 +356,7 @@ function openStore() {
     totalLen += len || 1
   }
 
+  if (quotesOnly) return { docs }
   const store = { docs, records, postings, docLen, totalLen, marks: readMarks(), bytes: txt.length }
   store.episodes = episodesOf(store)
   const byDoc = new Map()
@@ -459,7 +462,7 @@ function recencyOf(ageDays, salience = 0, emotion = 0, p = {}) {
 }
 
 function search(store, query, opts = {}) {
-  const { limit = 8, now = Date.now(), recency = {}, ws = null } = opts
+  const { limit = 8, now = Date.now(), recency = {}, ws = null, includeActs = true } = opts
   const terms = [...new Set(tokenize(String(query || '')))].slice(0, 48)
   if (!terms.length) return []
   const docs = store.docs
@@ -485,6 +488,7 @@ function search(store, query, opts = {}) {
   for (const [id, bm25] of scores) {
     const d = docs[id]
     if (!d || (d.who !== 'he' && d.who !== 'me' && d.who !== 'act')) continue
+    if (!includeActs && d.who === 'act') continue
     if (ws && !String(d.ws || '').toLowerCase().includes(ws)) continue
     const ep = store.episodeAt(id)
     const salience = ep ? ep.salience : 0
@@ -1097,6 +1101,8 @@ for (let i = 0; i < argv.length; i++) {
 
 const [cmd, ...args] = rest
 const here = process.cwd()
+const quoteFlags = cmd === 'recall' ? recallFlags(args) : null
+const quotesOnly = !flags.full && (quoteFlags?.compact || quoteFlags?.passages)
 
 if (cmd === 'hook') {
   try { runHook() } catch (e) { diag('hook 异常：' + (e && e.stack ? e.stack : e)) }
@@ -1115,6 +1121,7 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs ws                          各工作区各记了多少
   node mem.mjs dump [n]                    最近 n 条原始记录
   node mem.mjs show <行号|ID|证据哈希>      看完整原文 / 工具输出 / 文件版本
+  node mem.mjs show <行号> --range start:end  原样回读摘录
   node mem.mjs verify                      校验已接纳字节、正文指纹和证据
   node mem.mjs health                      一行体检
   node mem.mjs sync                        检查后接纳历史基线/合法尾部
@@ -1125,7 +1132,7 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs maintenance --prune          默认只试算
   node mem.mjs index build                  重建派生检索索引（SQLite FTS）
 
-  参数：--ws <工作区子串>  --limit n  --full
+  参数：--ws <工作区子串>  --limit n  --full  --compact  --rank passage
   数据：${STREAM}`)
   process.exit(0)
 }
@@ -1152,8 +1159,9 @@ if (cmd === 'remember') {
   process.exit(0)
 }
 
-const store = openStore()
+const store = openStore({ quotesOnly: quotesOnly && quoteFlags.passages })
 if (!store) {
+  if (quotesOnly) { console.log('[]'); process.exit(0) }
   console.log(`还没有记忆：${STREAM}\n（hook 生效后，第一句话开始就会自己落盘）`)
   process.exit(0)
 }
@@ -1234,6 +1242,7 @@ switch (cmd) {
     }
     const rec = /^\d+$/.test(ref) ? store.records[Number(ref)] : store.records.find((r) => r && r.id === ref)
     if (!rec) { console.log('（没有这条记录）'); break }
+    if (args[1] === '--range') { console.log(serializeRange(rec, ref, args[2])); break }
     console.log(JSON.stringify({ ...rec, text: undefined }, null, 2))
     console.log(String(rec.text || ''))
     break
@@ -1265,8 +1274,20 @@ switch (cmd) {
   }
 
   case 'recall': {
-    const arg = args.join(' ').trim()
+    const arg = quoteFlags.words.join(' ').trim()
     if (!arg) { console.log('要给一句话、#段号 或日期'); break }
+
+    if (quotesOnly) {
+      const output = { tokenize, n: flags.limit, refOf: (row) => String(row.i) }
+      if (quoteFlags.passages) {
+        const records = store.docs.filter((doc) => doc && doc.who !== 'act' && doc.text.trim() && keep(doc))
+        console.log(compactRecall(records, arg, { ...output, passages: true }))
+      } else {
+        const hits = search(store, arg, { limit: compactLimit(flags.limit), recency: cfg.recency, ws: flags.ws, includeActs: false })
+        console.log(compactQuotes(hits.map(({ id }) => store.docs[id]), arg, output))
+      }
+      break
+    }
 
     if (/^#?\d+$/.test(arg)) {
       const ep = store.episodes[Number(arg.replace('#', ''))]

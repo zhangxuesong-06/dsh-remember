@@ -6,7 +6,8 @@ import { createInterface } from 'node:readline'
 import { writeSync } from 'node:fs'
 import { HOME, loadCfg, wsNameOf, wsOf } from '../lib/config.mjs'
 import { Ledger } from '../lib/store.mjs'
-import { recallBlock, traceBlock } from '../lib/assemble.mjs'
+import { recallBlock, ledgerQuotes, traceBlock } from '../lib/assemble.mjs'
+import { serializeRange } from '../lib/mem-recall.mjs'
 import { mark } from '../lib/journal.mjs'
 import { readBlob } from '../lib/evidence.mjs'
 
@@ -30,6 +31,8 @@ const TOOLS = [
         query: { type: 'string', description: '要回想的事，用你记得的字眼写。' },
         episode: { type: 'integer', description: '已知段号时直接取那一段。' },
         full: { type: 'boolean', description: 'true 时展开该段更多原文。' },
+        passage: { type: 'boolean', description: '按原文窗口排名，返回紧凑摘录。' },
+        compact: { type: 'boolean', description: '只返回限量摘录、角色和原文位置。' },
       },
       required: ['query'],
     },
@@ -69,7 +72,10 @@ const TOOLS = [
     description: '按段号或证据哈希回读原文/完整工具输出。',
     inputSchema: {
       type: 'object',
-      properties: { id: { type: 'string', description: '段号（数字）或 64 位 sha256。' } },
+      properties: {
+        id: { type: 'string', description: '记录行号（从 0 开始）或 64 位 sha256。' },
+        range: { type: 'string', description: '摘录的 UTF-16 start:end，原样回读。' },
+      },
       required: ['id'],
     },
   },
@@ -84,6 +90,9 @@ function callTool(name, args = {}) {
   if (name === 'recall') {
     const query = String(args.query || '').trim()
     if (!query && args.episode === undefined) return text('recall 需要 query 或 episode。', true)
+    if (query && !Number.isInteger(args.episode) && !args.full && (args.passage || args.compact)) {
+      return text(ledgerQuotes(db(), query, { passages: args.passage, recency: cfg.recency }))
+    }
     const out = recallBlock(db(), {
       query,
       episode: Number.isInteger(args.episode) ? args.episode : null,
@@ -121,6 +130,7 @@ function callTool(name, args = {}) {
     const id = String(args.id || '').trim()
     if (/^\d+$/.test(id)) {
       const rec = db().fullRecord(Number(id))
+      if (rec && args.range !== undefined) return text(serializeRange(rec, id, args.range))
       return rec ? text(rec.text || '') : text('没有这一段。', true)
     }
     if (/^[a-f0-9]{64}$/.test(id)) {

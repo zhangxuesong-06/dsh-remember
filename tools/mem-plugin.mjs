@@ -160,6 +160,7 @@ async function registerMemoryTools(ctx, core, ws) {
     add('read', '按编号/ID读取记忆原文，或按 blob 哈希读取本地工具结果/文件版本。长文本分段读取。', {
       ref: { type: 'string', description: '记录编号、记录 ID 或 64 位 blob 哈希' },
       offset: { type: 'number' }, limit: { type: 'number' },
+      range: { type: 'string', description: '摘录的 UTF-16 start:end，原样回读。' },
     }, ['ref'], async (input) => {
       let row = core.getRecord(input.ref)
       if (!row && /^[a-f0-9]{64}$/.test(input.ref)) row = { id: input.ref, text: core.evidence(input.ref).toString('utf8') }
@@ -167,7 +168,12 @@ async function registerMemoryTools(ctx, core, ws) {
     })
     add('recall', '按线索查旧事。返回带来源的原文摘录；详情用 read，不能把相似命中当事实。', {
       query: { type: 'string' }, n: { type: 'number' }, scope: { type: 'string' },
+      passage: { type: 'boolean', description: '按原文窗口排名，返回紧凑摘录。' },
+      compact: { type: 'boolean', description: '只返回限量摘录、角色和原文位置。' },
     }, ['query'], async (input) => {
+      if (input.passage || input.compact) {
+        return { content: core.recallQuotes(input.query, { n: input.n, scope: input.scope, passages: input.passage }) }
+      }
       const hits = core.recall(input.query, { n: Math.max(1, Math.min(10, Number(input.n) || 5)), scope: input.scope || null })
       return { content: hits.length ? hits.map((h) => `#${h.seq} ${core.dayOf(h.ts)} <${h.kind}> [${h.who}]\n${excerpt(h.text, 420)}\n来源：${JSON.stringify(h.source || { sid: h.sid, legacy: true })}`).join('\n\n')
         + '\n\n（这里只给摘录；要完整原文用 mem_read #编号。）'

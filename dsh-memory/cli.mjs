@@ -22,7 +22,8 @@ import { Ledger } from './lib/store.mjs'
 import { workspaceDir, workspaceLine, loadCfg, saveCfg } from './lib/config.mjs'
 import { backfill } from './lib/backfill.mjs'
 import { setCaptureHuman } from './lib/capture.mjs'
-import { anchorBlock, primingBlock, recallBlock, traceBlock, arrivalBlock, dayOf } from './lib/assemble.mjs'
+import { anchorBlock, primingBlock, recallBlock, ledgerQuotes, traceBlock, arrivalBlock, dayOf } from './lib/assemble.mjs'
+import { recallFlags, serializeRange } from './lib/mem-recall.mjs'
 import { search, priming } from './lib/retrieve.mjs'
 import { readBlob } from './lib/evidence.mjs'
 
@@ -126,7 +127,10 @@ switch (cmd) {
   }
 
   case 'recall': {
+    const { words, compact, passages } = recallFlags(rest)
+    const arg = words.join(' ').trim()
     if (!arg) { console.log('要给一句话或日期'); break }
+    if (compact || passages) { console.log(ledgerQuotes(ledger, arg, { passages, recency: cfg.recency })); break }
     if (/^#?\d+$/.test(arg)) {
       const block = recallBlock(ledger, { episode: Number(arg.replace('#', '')), maxChars: cfg.recallMaxChars })
       console.log(block || '（没有这一段）')
@@ -285,6 +289,7 @@ switch (cmd) {
     }
     const rec = /^\d+$/.test(ref) ? ledger.fullRecord(Number(ref)) : ledger.rows().find((r) => r.id === ref)
     if (!rec) { console.log('（没有这条记录）'); break }
+    if (rest[1] === '--range') { console.log(serializeRange(rec, ref, rest[2])); break }
     console.log(JSON.stringify({ ...rec, text: undefined }, null, 2))
     console.log(String(rec.text || ''))
     break

@@ -45,6 +45,7 @@ export function search(ledger, query, opts = {}) {
     now = Date.now(),
     includeActs = true,
     episode = null,
+    filter,
     minScore = 0.01,
     recency: recParams = {},
   } = opts
@@ -78,6 +79,7 @@ export function search(ledger, query, opts = {}) {
   for (const [id, s] of scores) {
     const d = ledger.docs[id]
     if (!d) continue
+    if (filter && !filter(d)) continue
     if (!includeActs && d.who === 'act') continue
     if (d.who !== 'he' && d.who !== 'me' && d.who !== 'act') continue
     if (episode !== null) {

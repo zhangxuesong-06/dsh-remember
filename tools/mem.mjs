@@ -14,6 +14,7 @@
 import * as core from './mem-core.mjs'
 import { createCapture } from './mem-capture.mjs'
 import { memoryPage } from './mem-context.mjs'
+import { recallFlags } from './mem-recall.mjs'
 const { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats, compact, verify, health } = core
 
 const [cmd, ...rest] = process.argv.slice(2)
@@ -58,8 +59,13 @@ if (cmd === 'add') {
   const r = addAlias(term, syn)
   console.log(`${r.key} → ${r.synonyms.join(', ')}`)
 } else if (cmd === 'recall') {
-  const { text, flags } = parseArgs(rest)
+  const { words, compact, passages } = recallFlags(rest)
+  const { text, flags } = parseArgs(words)
   if (!text) { console.error('要查什么'); process.exit(2) }
+  if (compact || passages) {
+    console.log(core.recallQuotes(text, { n: flags.n, ws: flags.ws, scope: flags.scope, passages }))
+    process.exit(0)
+  }
   const hits = recall(text, { n: Number(flags.n) || 5, ws: flags.ws || null, scope: flags.scope || null })
   if (hits.note) console.log(`（${hits.note}）`)
   if (hits.aliasHit && hits.aliasHit.length) console.log(`（别名命中：${hits.aliasHit.join(', ')}）`)

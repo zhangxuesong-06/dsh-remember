@@ -13,6 +13,7 @@ import { verifyBlobs, readBlob } from './mem-artifacts.mjs'
 import { facetsOf, parseScope, matchScope, expandQuery, buildMap, vocabFromAliases, suggestAlias } from './mem-facets.mjs'
 import { buildAssoc, expandAssoc, assocStats } from './mem-assoc.mjs'
 import { tok } from './mem-tokenize.mjs'
+import { compactLimit, compactQuotes, compactRecall } from './mem-recall.mjs'
 
 export { tok }
 
@@ -158,6 +159,22 @@ function extendPostingIndex(cache, docs) {
   return cache
 }
 let _docIndexCache = { stamp: '', post: null, dl: null, total: 0, docs: null, docsLen: 0 }
+
+const recordRef = (row) => row.seq ? `#${row.seq}` : row.id
+
+export function recallQuotes(query, { n, ws, scope, passages } = {}) {
+  const output = { n, tokenize: tok, refOf: recordRef }
+  if (!passages) {
+    const hits = recall(query, { n: compactLimit(n), ws, scope })
+    return compactQuotes(hits.filter(recordRef), query, output)
+  }
+  const filter = parseScope(scope)
+  const vocab = filter ? vocabFromAliases(readAliases()) : null
+  const records = readAll().filter((row) => recordRef(row) && typeof row.text === 'string' && row.text.trim()
+    && (!ws || row.ws === ws) && (!filter || matchScope(facetsOf(row.text, vocab), filter)))
+  return compactRecall(records, query, { ...output, passages,
+    weight: (row) => ({ episode: 0.55, artifact: 0.85 }[row.kind] ?? 1) })
+}
 
 export function recall(query, { n = 5, ws = null, scope = null, now = Date.now(), rank = {} } = {}) {
   // 打分参数只在这一处收口。默认值等于历史行为；eval-recall 用同一组开关做 A/B。

@@ -17,6 +17,7 @@
     "lib/evidence-files.mjs",
     "lib/evidence.mjs",
     "lib/journal.mjs",
+    "lib/mem-recall.mjs",
     "lib/pending.mjs",
     "lib/retrieve.mjs",
     "lib/sessions.mjs",

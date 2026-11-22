@@ -20,7 +20,7 @@ export default Plugin.define({
       // CLI/tools live elsewhere and must not be copied into the runtime bundle.
       const RUNTIME = [
         'mem-core.mjs', 'mem-journal.mjs', 'mem-artifacts.mjs', 'mem-facets.mjs', 'mem-assoc.mjs',
-        'mem-tokenize.mjs', 'mem-capture.mjs', 'mem-context.mjs', 'mem-plugin.mjs', 'mem-maintenance.mjs',
+        'mem-tokenize.mjs', 'mem-recall.mjs', 'mem-capture.mjs', 'mem-context.mjs', 'mem-plugin.mjs', 'mem-maintenance.mjs',
       ]
       const names = RUNTIME.slice().sort()
       for (const name of names) {
@@ -28,7 +28,8 @@ export default Plugin.define({
       }
       const unlisted = fs.readdirSync(TOOLS).filter((n) => /^mem-.*\.mjs$/.test(n) && !RUNTIME.includes(n))
       if (unlisted.length) throw new Error('Runtime module not listed: ' + unlisted.join(', '))
-      const files = names.map((name) => [name, fs.readFileSync(path.join(TOOLS, name))])
+      const files = names.map((name) => [name, fs.readFileSync(name === 'mem-recall.mjs'
+        ? path.resolve(TOOLS, '../dsh-memory/lib', name) : path.join(TOOLS, name))])
       const digest = createHash('sha256')
       for (const [name, bytes] of files) digest.update(name).update('\0').update(bytes).update('\0')
       const version = digest.digest('hex')

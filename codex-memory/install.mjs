@@ -16,6 +16,7 @@ const files = [
   'agent-memory/recall.mjs',
   'agent-memory/repo.mjs',
   'tools/mem-tokenize.mjs',
+  ['dsh-memory/lib/mem-recall.mjs', 'tools/mem-recall.mjs'],
   'tools/mem-journal.mjs',
 ]
 

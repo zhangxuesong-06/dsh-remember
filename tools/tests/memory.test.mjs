@@ -296,6 +296,11 @@ test('插件在文本结束时保存最后回答；续调每次注入，持久�
   const read = tools.find((t) => t.name === 'read')
   const row = core.readAll().find((r) => r.who === 'assistant')
   assert.match((await read.execute({ ref: String(row.seq) })).content, /最后回答含实现细节/)
+  const recall = tools.find((t) => t.name === 'recall')
+  const result = await recall.execute({ query: '最后回答含实现细节', passage: true })
+  const [quote] = JSON.parse(result.content)
+  assert.equal(quote.ref, `#${row.seq}`)
+  assert.deepEqual(JSON.parse((await read.execute({ ref: quote.ref, range: `${quote.start}:${quote.end}` })).content), quote)
   await cleanup()
 })
 

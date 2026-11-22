@@ -182,6 +182,10 @@ try {
   const full = await memoryRead.execute({ id: 0 })
   ok('memory_read 能按行号回读', /^\{/.test(full.text) && full.text.length > 20, full.text.slice(0, 40))
   ok('memory_read 不是空记录', !/没有这条记录/.test(full.text))
+  const passage = await recall.execute({ query: '身份来自原话', passage: true })
+  const [quote] = JSON.parse(passage.text)
+  const quoted = await memoryRead.execute({ ref: quote.ref, range: `${quote.start}:${quote.end}` })
+  ok('分段召回和范围回读逐字一致', JSON.stringify(quote) === quoted.text && quote.who === 'assistant')
 } catch (e) {
   ok('memory_read 执行', false, e.message)
 }

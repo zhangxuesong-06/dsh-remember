@@ -8,7 +8,8 @@
 //   4. 拼装绝不抛异常。记忆坏了，最多是这一轮想不起来，不能连话都说不出。
 
 import { tokenize, headline } from './tokenize.mjs'
-import { priming, episodeText, traceHits, recencyOf } from './retrieve.mjs'
+import { priming, episodeText, traceHits, recencyOf, search } from './retrieve.mjs'
+import { compactLimit, compactQuotes, compactRecall } from './mem-recall.mjs'
 
 const DAY = 86400000
 
@@ -433,6 +434,23 @@ export function recentMention(ledger, query, target, sid, now = Date.now()) {
 // 两种口气，绝不混用：
 //   【想起来了】     —— 有稀有的词对上、或者原话里真的出现了这句话
 //   【有点像是这一段】 —— 只是「最像」。内容可以看，但不能当事实认。
+export function ledgerQuotes(ledger, query, { passages, when, recency } = {}) {
+  const output = { tokenize, refOf: (row) => String(row.line) }
+  const filter = when ? (doc) => dayOf(doc.ts) === when : undefined
+  if (!passages) {
+    const hits = search(ledger, query, { limit: compactLimit(), includeActs: false, filter, recency })
+    const records = hits.map(({ id }) => ({ text: ledger.fullText(id), who: ledger.docs[id].who, line: id }))
+    return compactQuotes(records, query, output)
+  }
+  const records = []
+  ledger.docs.forEach((doc, line) => {
+    if (!doc || doc.who === 'act' || (filter && !filter(doc))) return
+    const text = ledger.fullText(line)
+    if (text.trim()) records.push({ text, who: doc.who, ts: doc.ts, line })
+  })
+  return compactRecall(records, query, { ...output, passages })
+}
+
 export function recallBlock(ledger, { query = '', episode = null, maxChars = 2200, full = false, sid = null } = {}) {
   let target = null
   let strength = { strong: true, matched: 0, rare: 0, phrase: false }

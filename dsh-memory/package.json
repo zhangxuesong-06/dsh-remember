@@ -24,6 +24,7 @@
     "lib/config.mjs",
     "lib/evidence-files.mjs",
     "lib/evidence.mjs",
+    "lib/mem-recall.mjs",
     "lib/retrieve.mjs",
     "lib/session-file.mjs",
     "lib/signal.mjs",
