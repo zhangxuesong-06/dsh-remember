@@ -16,6 +16,11 @@ const DAY = 864e5
 const K1 = 1.25
 const B = 0.72
 const MIN_COVERAGE = 0.2
+const PASSAGE_SIZE = 640
+const PASSAGE_OVERLAP = 128
+const QUOTE_SIZE = 192
+const COMPACT_HITS = 5
+const COMPACT_BYTES = 3072
 export const LONG_TEXT_RANK = Object.freeze({ b: 0.45 })
 
 const WHO = { he: 'user', me: 'assistant', act: 'action', meta: 'meta' }
@@ -116,10 +121,10 @@ function multiplier(rec) {
   return (KIND_WEIGHT[rec.kind] ?? 1) * (WHO_WEIGHT[rec.who] ?? 1)
 }
 
-function dedupeKey(rec) {
+function dedupeKey(rec, passages) {
   const text = rec.text.replace(/\s+/g, ' ').trim()
   // 长文本按正文折叠：同一段话、每日重复的模板，不该各占一个位置。
-  if (text.length >= 80) return `${rec.source}|${rec.who}|${text.slice(0, 120)}`
+  if (text.length >= 80) return `${rec.source}|${rec.who}|${passages ? text : text.slice(0, 120)}`
   // 短文本保留会话区分，避免把不同会话里碰巧相同的一句吞掉。
   if (text.length >= 12) return `${rec.source}|${rec.sid || ''}|${rec.who}|${text.slice(0, 120)}`
   if (rec.messageID) return `${rec.source}|${rec.sid || ''}|${rec.messageID}|${text}`
@@ -134,14 +139,37 @@ function passes(rec, opts) {
   return true
 }
 
+// 偏移与 String.slice 一致，窗口边界避开 UTF-16 代理对。
+function boundary(text, offset) {
+  const code = text.charCodeAt(offset)
+  const previous = text.charCodeAt(offset - 1)
+  return code >= 0xDC00 && code <= 0xDFFF && previous >= 0xD800 && previous <= 0xDBFF ? offset - 1 : offset
+}
+
+function* windows(text, size, overlap) {
+  for (let start = 0; start < text.length;) {
+    const end = boundary(text, Math.min(text.length, start + size))
+    yield { start, end }
+    if (end === text.length) break
+    start = boundary(text, end - overlap)
+  }
+}
+
 export function createRecallSearch({ records, stores }, opts = {}) {
   const pool = records.filter((r) => passes(r, opts))
-  const N = pool.length
+  const passages = opts.passages
+  const windowsByIndex = passages ? pool.flatMap((record, parent) =>
+    [...windows(record.text, PASSAGE_SIZE, PASSAGE_OVERLAP)]
+      .filter(({ start, end }) => record.text.slice(start, end).trim())
+      .map(({ start, end }) => ({ parent, start, end }))) : null
+  const N = windowsByIndex?.length ?? pool.length
   const post = new Map()
   const dl = new Array(N)
   let total = 0
-  pool.forEach((rec, i) => {
-    const t = tok(rec.text)
+  for (let i = 0; i < N; i++) {
+    const window = windowsByIndex?.[i]
+    const text = window ? pool[window.parent].text.slice(window.start, window.end) : pool[i].text
+    const t = tok(text)
     dl[i] = t.length
     total += t.length
     const tf = new Map()
@@ -151,7 +179,7 @@ export function createRecallSearch({ records, stores }, opts = {}) {
       if (!a) { a = []; post.set(k, a) }
       a.push(i, v)
     }
-  })
+  }
   const avg = total / N || 1
 
   return function search(query, { n = 8, now = Date.now(), rank = {}, exclude } = {}) {
@@ -177,21 +205,31 @@ export function createRecallSearch({ records, stores }, opts = {}) {
 
     const scored = []
     for (const [index, bm25] of scores) {
-      const rec = pool[index]
+      const window = windowsByIndex?.[index]
+      const parent = window?.parent ?? index
+      const rec = pool[parent]
       const coverage = hitCount.get(index) / qterms.length
       if (coverage < minCoverage || exclude?.(rec)) continue
       const score = bm25 * recency(rec.ts, now, recencyBoost, halfLifeDays) * multiplier(rec) * coverage ** coveragePower
-      scored.push({ ...rec, score, coverage: +coverage.toFixed(2) })
+      scored.push({ parent, window, score, coverage })
     }
     scored.sort((left, right) => right.score - left.score)
 
     const seen = new Set()
+    const seenParents = new Set()
     const out = []
-    for (const rec of scored) {
-      const key = dedupeKey(rec)
+    for (const { parent, window, score, coverage } of scored) {
+      if (window) {
+        if (seenParents.has(parent)) continue
+        seenParents.add(parent)
+      }
+      const rec = pool[parent]
+      const key = dedupeKey(rec, passages)
       if (seen.has(key)) continue
       seen.add(key)
-      out.push(rec)
+      const hit = { ...rec, score, coverage: +coverage.toFixed(2) }
+      if (window) hit.passage = { start: window.start, end: window.end }
+      out.push(hit)
       if (out.length >= n) break
     }
     if (out.length) out.stores = stores
@@ -234,6 +272,62 @@ export function parseRef(ref) {
   return { source, workspace: parts.length ? parts.join(':') : null, line }
 }
 
+function quoteRange(record, start, end) {
+  return { ref: refOf(record), who: record.who, start, end, text: record.text.slice(start, end) }
+}
+
+export function quoteFor(record, query) {
+  const { text, passage } = record
+  if (text.length <= QUOTE_SIZE) return quoteRange(record, 0, text.length)
+
+  // 短线索有逐字命中时优先围绕原话取上下文。
+  const exact = query ? text.indexOf(query) : -1
+  if (exact !== -1) {
+    const margin = Math.max(0, Math.floor((QUOTE_SIZE - query.length) / 2))
+    const start = boundary(text, Math.min(text.length - QUOTE_SIZE, Math.max(0, exact - margin)))
+    const end = boundary(text, start + QUOTE_SIZE)
+    // 调整代理对边界后仍让可放入的逐字命中保持完整。
+    if (query.length <= QUOTE_SIZE && exact + query.length > end) {
+      return quoteRange(record, exact, boundary(text, Math.min(text.length, exact + QUOTE_SIZE)))
+    }
+    return quoteRange(record, start, end)
+  }
+
+  const offset = passage?.start ?? 0
+  const range = text.slice(offset, passage?.end)
+  const terms = new Set(tok(query))
+  let best = { start: 0, end: boundary(range, Math.min(range.length, QUOTE_SIZE)) }
+  let bestScore = 0
+  for (const window of windows(range, QUOTE_SIZE, 64)) {
+    const matches = new Set(tok(range.slice(window.start, window.end)).filter((term) => terms.has(term)))
+    if (matches.size > bestScore) {
+      best = window
+      bestScore = matches.size
+    }
+  }
+  return quoteRange(record, offset + best.start, offset + best.end)
+}
+
+function printCompact(records, query, n) {
+  const rows = []
+  let bytes = 3 // [] and newline
+  for (const record of records.slice(0, Math.min(n, COMPACT_HITS))) {
+    const row = JSON.stringify(quoteFor(record, query))
+    bytes += Buffer.byteLength(row) + Number(rows.length > 0)
+    if (bytes > COMPACT_BYTES) break
+    rows.push(row)
+  }
+  console.log(`[${rows.join(',')}]`)
+}
+
+function parseRange(value, text) {
+  const match = /^(\d+):(\d+)$/.exec(value)
+  if (!match) return null
+  const start = Number(match[1]), end = Number(match[2])
+  if (start >= end || end > text.length || boundary(text, start) !== start || boundary(text, end) !== end) return null
+  return { start, end }
+}
+
 function dayOf(ts) {
   return ts ? new Date(ts).toISOString().slice(0, 10) : '----------'
 }
@@ -255,7 +349,7 @@ function parseSince(v) {
   return Number.isFinite(t) ? t : null
 }
 
-function flags(args, withRank = false) {
+function flags(args, command) {
   const o = { n: 8, source: null, since: null, ws: null, withTools: false, json: false, rest: [] }
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -265,11 +359,13 @@ function flags(args, withRank = false) {
     else if (a === '--ws') o.ws = args[++i] || null
     else if (a === '--with-tools') o.withTools = true
     else if (a === '--json') o.json = true
-    else if (a === '--rank' && withRank) {
+    else if (a === '--compact' && command !== 'show') o.compact = true
+    else if (a === '--range' && command === 'show') o.range = args[++i] ?? ''
+    else if (a === '--rank' && command === 'recall') {
       const name = args[++i]
-      if (name === 'long-text') o.rank = LONG_TEXT_RANK
-      else if (name === 'default') o.rank = {}
-      else return null
+      if (!['default', 'long-text', 'passage'].includes(name)) return null
+      o.rank = name === 'long-text' ? LONG_TEXT_RANK : {}
+      o.passages = name === 'passage'
     }
     else o.rest.push(a)
   }
@@ -288,30 +384,33 @@ function main() {
   const argv = process.argv.slice(2)
   const cmd = argv.shift()
   if (cmd === 'recall') {
-    const o = flags(argv, true)
+    const o = flags(argv, cmd)
     if (!o) {
-      console.error('--rank 可选 default 或 long-text。')
+      console.error('--rank 可选 default、long-text 或 passage。')
       process.exitCode = 2
       return
     }
     const query = o.rest.join(' ').trim()
     if (!query) { console.error('用法：agent-memory/recall.mjs recall "查询"'); process.exit(1) }
-    const hits = recall(query, o)
+    const hits = recall(query, o.compact ? { ...o, n: Math.min(o.n, COMPACT_HITS) } : o)
+    if (o.compact) { printCompact(hits, query, o.n); return }
     if (o.json) { console.log(JSON.stringify({ query, stores: hits.stores || [], hits }, null, 2)); return }
     if (!hits.length) { console.log('没找到。可以试 trace "<原话片段>"，或加 --with-tools。'); return }
     const count = (src) => hits.filter((h) => h.source === src).length
     console.log(`跨库召回 ${hits.length} 条（OpenCode ${count('opencode')} · DSH ${count('dsh')} · WorkBuddy ${count('workbuddy')} · ZCode ${count('zcode')} · Codex ${count('codex')}）\n`)
     for (const h of hits) {
-      console.log(`[${h.source}] ${dayOf(h.ts)} ${h.workspace || '-'} ${refOf(h)}  ${excerpt(h.text)}`)
+      const quote = quoteFor(h, query)
+      console.log(`[${h.source}] ${dayOf(h.ts)} ${h.workspace || '-'} ${quote.ref} ${quote.start}:${quote.end}  ${excerpt(quote.text, QUOTE_SIZE)}`)
     }
     console.log(`\n回读：node agent-memory/recall.mjs show ${refOf(hits[0])}`)
     return
   }
   if (cmd === 'trace') {
-    const o = flags(argv)
+    const o = flags(argv, cmd)
     const needle = o.rest.join(' ').trim()
     if (!needle) { console.error('用法：agent-memory/recall.mjs trace "原话片段"'); process.exit(1) }
     const hits = trace(needle, o)
+    if (o.compact) { printCompact(hits, needle, o.n); return }
     if (o.json) { console.log(JSON.stringify({ needle, hits }, null, 2)); return }
     if (!hits.length) { console.log('所有来源里都没有这段原话。'); return }
     console.log(`按字命中 ${hits.length} 条\n`)
@@ -319,11 +418,18 @@ function main() {
     return
   }
   if (cmd === 'show') {
-    const o = flags(argv)
+    const o = flags(argv, cmd)
     const ref = parseRef(o.rest[0])
     if (!ref) { console.error('用法：agent-memory/recall.mjs show <source>:<line>'); process.exit(1) }
     const rec = readAt(ref.source, ref.line, ref.workspace)
     if (!rec) { console.error(`没找到 ${o.rest[0]}`); process.exit(1) }
+    if (o.range !== undefined) {
+      const range = parseRange(o.range, rec.text)
+      if (!range) { console.error('--range 需要有效的原文起止位置 start:end。'); process.exitCode = 2; return }
+      const quote = quoteRange(rec, range.start, range.end)
+      console.log(o.json ? JSON.stringify(quote) : quote.text)
+      return
+    }
     if (o.json) { console.log(JSON.stringify(rec, null, 2)); return }
     console.log(`[${rec.source}] ${dayOf(rec.ts)} ${rec.workspace || '-'} ${refOf(rec)} · ${rec.who}/${rec.kind}`)
     console.log('')
@@ -337,9 +443,9 @@ function main() {
     return
   }
   console.log('用法：')
-  console.log('  node agent-memory/recall.mjs recall "查询" [-n 8] [--source dsh] [--since 7d] [--ws 目录] [--rank default|long-text] [--with-tools] [--json]')
-  console.log('  node agent-memory/recall.mjs trace "原话片段" [--source dsh] [--json]')
-  console.log('  node agent-memory/recall.mjs show <source>:<line>')
+  console.log('  node agent-memory/recall.mjs recall "查询" [-n 8] [--source dsh] [--since 7d] [--ws 目录] [--rank default|long-text|passage] [--with-tools] [--json|--compact]')
+  console.log('  node agent-memory/recall.mjs trace "原话片段" [--source dsh] [--json|--compact]')
+  console.log('  node agent-memory/recall.mjs show <source>:<line> [--range start:end] [--json]')
   console.log('  node agent-memory/recall.mjs sources')
 }
 

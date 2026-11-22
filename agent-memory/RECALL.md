@@ -91,11 +91,14 @@ node agent-memory/recall.mjs recall "kgnav 孤岛" -n 8
 node agent-memory/recall.mjs recall "题库" --source workbuddy --since 30d
 node agent-memory/recall.mjs recall "派生索引" --with-tools --json
 node agent-memory/recall.mjs recall "长回复中的线索" --rank long-text
+node agent-memory/recall.mjs recall "记得的原文关键词" --rank passage --compact -n 3
 node agent-memory/recall.mjs trace "扫码走局域网"
 node agent-memory/recall.mjs show dsh:812
 ```
 
 引用格式是 `source:line`；DSH 多工作区时是 `dsh:<工作区>:<line>`。JSONL 只追加，所以行号稳定。
+
+`recall` 和 `trace` 的 `--compact` 返回一个 JSON 数组。每条含角色、完整来源引用及命中处的原文摘录。最多 5 条，每条正文最多 192 个 UTF-16 码元，整个序列化输出最多 3,072 个 UTF-8 字节。按返回的 `ref`、`start` 和 `end` 调用 `show "<ref>" --range <start>:<end> --json` 可复核原文。位置从 0 开始，末尾不计入，和 JavaScript `String.slice` 一致。需要全文时用 `show "<ref>"`。
 
 ## 打分
 
@@ -108,6 +111,8 @@ BM25(K1=1.25, B=0.72) × 新鲜加分 × 类别权重
 ```
 
 `--rank long-text` 把 BM25 的长度归一化参数 `b` 从默认的 0.72 降到 0.45，减轻长记录的排序惩罚。搜索结果继续带完整原文引用。用 `--rank default` 可按默认参数查询。
+
+`--rank passage` 适合记得具体措辞的查询。它按 640 个 UTF-16 码元、重叠 128 个码元切分原文，每条记录用最相关的段落参与排名。段落索引按需在内存中创建。长段落结果按完整正文折叠，同一记录只返回一次。
 
 类别权重：普通记录 1.0 · artifact 0.85 · episode 0.55 · meta 会话标题 0.4 · 工具行 0.35。
 
@@ -138,7 +143,7 @@ node agent-memory/eval-live.mjs
 node agent-memory/eval-live.mjs --at "2026-11-21T12:00:00+08:00"
 ```
 
-脚本只读当前账本，复用一个索引比较默认排序与覆盖率、长度归一化和新鲜度的候选参数。按来源把较早会话放入调参组，较晚会话放入留出组。每个会话的每类题最多抽 12 道。输出只有总体和分来源计数、命中率、MRR@8 及空结果数。
+脚本只读当前账本，复用整条索引比较默认排序与覆盖率、长度归一化和新鲜度的候选参数，并另建分段索引测试 `passage`。按来源把较早会话放入调参组，较晚会话放入留出组。每个会话的每类题最多抽 12 道。输出包含总体和分来源计数、命中率、MRR@8 和空结果数。原文线索另测目标是否进入前八条及其返回摘录是否包含线索，涵盖长文后半段取样。
 
 回答题用原始提问找有明确轮次归属的助手回复，查询时排除重复的提问原文。短线索题从原文截取较短片段，按完整来源引用判定命中。两种题衡量有词面线索时的表现，改述召回仍使用上面的固定评测。`--at` 固定新鲜度计算的时间。账本继续追加后，样本和结果可能变化。
 

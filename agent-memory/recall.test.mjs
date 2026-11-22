@@ -271,3 +271,57 @@ test('CLI 可选长文排序，引用仍回到同一条原话', () => {
   assert.equal(run('缓存方案', '--rank', 'unknown').status, 2)
   assert.equal(run('缓存方案', '--rank').status, 2)
 })
+
+test('分段排名提升长回复，保留记录引用并按父记录去重', () => {
+  const query = '冷机校准脉冲确认'
+  const prefix = '平时监控窗口无异常。'.repeat(90)
+  const original = `${prefix}${query}。\n  原话有缩进。🌌${prefix}${query}。`
+  writeJsonl(path.join(ocRoot, 'stream.jsonl'), [
+    { who: 'assistant', sid: 'match', ts: NOW, text: original },
+    { who: 'assistant', sid: 'partial', ts: NOW, text: '冷机校准常规备注。' },
+    { who: 'assistant', sid: 'different-ending', ts: NOW, text: `${prefix}另一个记录：${query}。` },
+    { who: 'assistant', sid: 'duplicate', ts: NOW, text: original },
+  ])
+  assert.equal(cross.recall(query, { n: 1, now: NOW })[0].sid, 'partial')
+  const options = { passages: true, now: NOW, source: 'opencode' }
+  const hits = cross.recall(query, options)
+  assert.equal(hits[0].sid, 'match')
+  assert.deepEqual(hits.map(cross.refOf).toSorted(), ['opencode:1', 'opencode:2', 'opencode:3'])
+  assert.equal(hits[0].text, original)
+  assert.ok(original.slice(hits[0].passage.start, hits[0].passage.end).includes(query))
+  const quote = cross.quoteFor(hits[0], '脉冲确认 冷机校准')
+  assert.ok(quote.text.includes(query))
+  assert.equal(quote.text, original.slice(quote.start, quote.end))
+  assert.deepEqual(cross.recall(query, { ...options, exclude: (hit) => hit.text === original }).map(cross.refOf).toSorted(), ['opencode:2', 'opencode:3'])
+})
+
+test('模型用摘录限制条数和序列化字节，引用可按偏移逐字回读', () => {
+  const query = '冷机校准脉冲确认'
+  const original = `${'演练背景。'.repeat(250)}\n    🌌${query}\n    确认下一步。${'界'.repeat(230)}`
+  writeJsonl(path.join(dshStore, 'stream.jsonl'), Array.from({ length: 16 }, (_, i) => ({
+    who: 'me', type: 'assistant/message', sid: `run-${i}`, ts: NOW + i, text: `${original}${i}`,
+  })))
+  const run = (...args) => spawnSync(process.execPath, [path.join(here, 'recall.mjs'), ...args], { encoding: 'utf8' })
+  for (const args of [['recall', query], ['recall', query, '--rank', 'passage'], ['trace', query]]) {
+    const result = run(...args, '--compact', '-n', '1000')
+    assert.equal(result.status, 0, result.stderr)
+    assert.ok(Buffer.byteLength(result.stdout) <= 3072)
+    const hits = JSON.parse(result.stdout)
+    assert.ok(hits.length >= 1 && hits.length <= 5)
+    for (const hit of hits) {
+      assert.match(hit.ref, /^dsh:ws-alpha:\d+$/)
+      assert.equal(hit.who, 'assistant')
+      assert.ok(hit.text.length <= 192 && hit.text.isWellFormed())
+      assert.ok(hit.text.includes(`🌌${query}\n    确认`))
+      assert.equal(hit.text, original.slice(hit.start, hit.end))
+    }
+    const { ref, start, end, text } = hits[0]
+    const reread = run('show', ref, '--range', `${start}:${end}`, '--json')
+    assert.equal(reread.status, 0, reread.stderr)
+    assert.equal(JSON.parse(reread.stdout).text, text)
+  }
+  const broken = original.indexOf('🌌') + 1
+  for (const range of ['-1:12', '1:1', '12:1', '1:99999', `${broken}:${broken + 2}`]) {
+    assert.equal(run('show', 'dsh:ws-alpha:1', '--range', range, '--json').status, 2)
+  }
+})

@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url'
 import { tok } from '../tools/mem-tokenize.mjs'
-import { createRecallSearch, loadAll, LONG_TEXT_RANK, refOf } from './recall.mjs'
+import { createRecallSearch, loadAll, LONG_TEXT_RANK, quoteFor, refOf } from './recall.mjs'
 
 const LIMIT = 8
 const PER_SESSION = 12
@@ -36,6 +36,7 @@ function shortClue(record) {
 export function buildLiveCases(records) {
   const turns = new Map()
   const clues = []
+  const laterClues = []
   for (const record of records) {
     if (!record.sid || record.kind !== 'message' || !['user', 'assistant'].includes(record.who)) continue
     const session = JSON.stringify([record.source, record.store, record.sid])
@@ -48,7 +49,17 @@ export function buildLiveCases(records) {
       turns.set(key, group)
     }
     const query = shortClue(record)
-    if (query) clues.push({ source: record.source, session, ts: record.ts, query, refs: new Set([ref]) })
+    if (query) {
+      const clue = { source: record.source, session, ts: record.ts, query, refs: new Set([ref]) }
+      clues.push(clue)
+      if (record.text.length >= 1280) {
+        const later = [...record.text.slice(Math.floor(record.text.length / 2)).matchAll(/[^\r\n。！？；]+/gu)]
+          .sort((left, right) => Math.abs(left.index - record.text.length / 4) - Math.abs(right.index - record.text.length / 4))
+          .map(([line]) => line.trim().slice(0, 48).trim())
+          .find((part) => part.length >= 12 && new Set(tok(part)).size >= 6 && record.text.indexOf(part) >= 640)
+        if (later) laterClues.push({ ...clue, query: later })
+      }
+    }
   }
 
   const answers = []
@@ -62,7 +73,7 @@ export function buildLiveCases(records) {
       ts: prompt.ts, query, input: refOf(prompt), refs: new Set(replies.map(refOf)),
     })
   }
-  return { answers, clues }
+  return { answers, clues, laterClues }
 }
 
 export function splitLiveCases(cases) {
@@ -93,14 +104,16 @@ export function splitLiveCases(cases) {
   }))
 }
 
-function evaluate(search, cases, now, rank) {
+function evaluate(search, cases, now, rank, trackQuotes) {
   const results = cases.map(({ query, refs, source, input }) => {
     const hits = search(query, {
       n: LIMIT, now, rank,
       exclude: input ? (record) => record.who === 'user' &&
         (refOf(record) === input || record.text.trim() === query) : undefined,
     })
-    return { source, position: hits.findIndex((record) => refs.has(refOf(record))) + 1, empty: !hits.length }
+    const position = hits.findIndex((record) => refs.has(refOf(record))) + 1
+    const quoteHit = trackQuotes && position > 0 && quoteFor(hits[position - 1], query).text.includes(query)
+    return { source, position, quoteHit, empty: !hits.length }
   })
   const summary = (rows) => {
     if (!rows.length) return { n: 0 }
@@ -111,6 +124,7 @@ function evaluate(search, cases, now, rank) {
       hit8: rate(rows.filter(({ position }) => position > 0).length),
       mrr: rate(rows.reduce((sum, { position }) => sum + (position ? 1 / position : 0), 0)),
       empty: rows.filter((row) => row.empty).length,
+      ...(trackQuotes ? { quoteAt8: rate(rows.filter((row) => row.quoteHit).length) } : {}),
     }
   }
   return {
@@ -128,21 +142,23 @@ function main(args) {
   }
   const library = loadAll()
   const search = createRecallSearch(library)
+  const passageSearch = createRecallSearch(library, { passages: true })
   const cases = Object.entries(splitLiveCases(buildLiveCases(library.records)))
   if (cases.every(([, { tune, holdout }]) => !tune.length && !holdout.length)) {
     console.error('当前账本没有可评测的消息。')
     return 1
   }
-  const variants = Object.fromEntries(Object.entries(VARIANTS).map(([variant, rank]) => [
+  const variants = Object.fromEntries(Object.entries({ ...VARIANTS, passage: {} }).map(([variant, rank]) => [
     variant, Object.fromEntries(cases.map(([name, groups]) => [
       name, Object.fromEntries(Object.entries(groups).map(([split, rows]) => [
-        split, evaluate(search, rows, now, rank),
+        split, evaluate(variant === 'passage' ? passageSearch : search, rows, now, rank, name !== 'answers'),
       ])),
     ])),
   ]))
   console.log(JSON.stringify({
     at: new Date(now).toISOString(),
     records: Object.fromEntries(library.stores.map(({ source, records }) => [source, records])),
+    indexedRecords: library.records.length,
     variants,
   }, null, 2))
   return 0

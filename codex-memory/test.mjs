@@ -24,7 +24,11 @@ test('Codex 钩子保留原文、会话和轮次，共享检索可回查，重�
   }
   const common = { session_id: 'synthetic-session', turn_id: 'synthetic-turn', cwd: root }
   const prompt = { ...common, hook_event_name: 'UserPromptSubmit', prompt: '  如何核对合成标定记录？\n' }
-  const stop = { ...common, hook_event_name: 'Stop', last_assistant_message: '核对标定。\n    保留原文。  ' }
+  const clue = '光谱暗电流基准已校准'
+  const stop = {
+    ...common, hook_event_name: 'Stop',
+    last_assistant_message: `${'演练背景。'.repeat(3600)}\n    ${clue}。\n    保留原文。  `,
+  }
   for (const event of [prompt, prompt, { ...stop, last_assistant_message: null }, stop, stop]) {
     assert.deepEqual(JSON.parse(run('codex-memory/hook.mjs', [], event)), {})
   }
@@ -34,6 +38,14 @@ test('Codex 钩子保留原文、会话和轮次，共享检索可回查，重�
     ['user', common.turn_id, prompt.prompt], ['assistant', common.turn_id, stop.last_assistant_message],
   ])
   assert.equal(JSON.parse(run('agent-memory/recall.mjs', ['show', 'codex:2', '--json'])).text, stop.last_assistant_message)
+  const compact = run('agent-memory/recall.mjs', ['recall', clue, '--rank', 'passage', '--compact'])
+  const [quote] = JSON.parse(compact)
+  assert.equal(quote.ref, 'codex:2')
+  assert.ok(quote.text.includes(clue))
+  assert.ok(Buffer.byteLength(compact) <= 3072)
+  assert.deepEqual(JSON.parse(run('agent-memory/recall.mjs', [
+    'show', quote.ref, '--range', `${quote.start}:${quote.end}`, '--json',
+  ])), quote)
   const coverage = JSON.parse(run(path.join(here, '../agent-memory/coverage.mjs'), ['--source', 'codex', '--json']))
   assert.equal(coverage[0].answered, 1)
 })
