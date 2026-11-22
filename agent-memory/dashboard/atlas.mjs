@@ -141,3 +141,30 @@ export function buildAtlas(records, edges) {
   }
   return positions
 }
+
+
+// Move unplaced points with the nearest published member of their evidence component.
+export function keepPublishedPositions(next, published, edges) {
+  const neighbors = new Map()
+  for (const [from, to] of edges) {
+    for (const [left, right] of [[from, to], [to, from]]) {
+      if (!neighbors.has(left)) neighbors.set(left, [])
+      neighbors.get(left).push(right)
+    }
+  }
+  const anchors = new Map([...published].sort(([a], [b]) => compare(a, b)).map(([ref]) => [ref, ref]))
+  const queue = [...anchors.keys()]
+  for (let i = 0; i < queue.length; i++) {
+    for (const ref of (neighbors.get(queue[i]) ?? []).sort(compare)) {
+      if (anchors.has(ref)) continue
+      anchors.set(ref, anchors.get(queue[i]))
+      queue.push(ref)
+    }
+  }
+  const deltas = new Map([...published].map(([ref, point]) => [ref, point.map((value, axis) => value - next.get(ref)[axis])]))
+  for (const [ref, anchor] of anchors) {
+    const point = published.get(ref) ?? next.get(ref).map((value, axis) => value + deltas.get(anchor)[axis])
+    next.set(ref, point)
+  }
+  return next
+}

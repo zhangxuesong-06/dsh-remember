@@ -9,7 +9,8 @@ import { coverage } from '../coverage.mjs'
 import { writeStreams } from '../eval-recall.mjs'
 import { loadAll, parseRef, readAt, recall, refOf, trace } from '../recall.mjs'
 import { repoRoot, streams } from '../repo.mjs'
-import { buildAtlas, galaxyRadius, indexRelations } from './atlas.mjs'
+import { buildAtlas, galaxyRadius, indexRelations, keepPublishedPositions } from './atlas.mjs'
+import { buildSemanticIndex, EmbeddingCache } from './semantic.mjs'
 import { randomFrom } from './graph-data.mjs'
 import { sha256 } from '../../tools/mem-journal.mjs'
 
@@ -29,6 +30,7 @@ const staticFiles = new Map([
 ])
 const recallLimit = 100
 const neighborhoodLimit = 12
+const sampledLimit = 360
 
 class RequestError extends Error {
   constructor(status, message) {
@@ -187,12 +189,55 @@ function listRecords(params, file, now) {
   }
 }
 
-function createAtlasReader() {
+function sampleAtlas(records, points) {
+  const groups = new Map()
+  for (const record of [...records].sort((a, b) => (b.ts || 0) - (a.ts || 0))) {
+    if (!groups.has(record.source)) groups.set(record.source, [])
+    groups.get(record.source).push(record.ref)
+  }
+  const sample = []
+  for (let i = 0; sample.length < Math.min(sampledLimit, records.length); i++) {
+    for (const group of groups.values()) {
+      if (group[i]) sample.push(points.get(group[i]))
+      if (sample.length === sampledLimit) break
+    }
+  }
+  return sample
+}
+
+function readPublishedPositions(file) {
+  try {
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (state.schema !== 1 || !Array.isArray(state.positions)) return new Map()
+    return new Map(state.positions.filter(row => Array.isArray(row) && typeof row[0] === 'string'
+      && typeof row[1]?.digest === 'string' && Array.isArray(row[1].point)
+      && row[1].point.length === 3 && row[1].point.every(Number.isFinite)))
+  } catch {
+    return new Map()
+  }
+}
+
+function savePublishedPositions(file, positions) {
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(temporary, JSON.stringify({ schema: 1, positions: [...positions] }), { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, file)
+  } catch {
+    // The star map still works on a read-only installation. Its in-memory anchor map remains available.
+  } finally {
+    try { fs.rmSync(temporary, { force: true }) } catch {}
+  }
+}
+
+function createAtlasReader(positionFile) {
   let priorStamp
   let index
   let relations
   let positions
+  let publishedState
   let overviewPoints
+  let samplePoints
   let revision = 0
 
   function reload() {
@@ -220,8 +265,23 @@ function createAtlasReader() {
     index = new Map(entries.map(record => [record.ref, record]))
     relations = indexRelations(entries)
     const browsable = entries.filter(record => record.kind !== 'tool')
-    positions = buildAtlas(browsable, indexRelations(browsable).layoutEdges)
-    overviewPoints = browsable.map(record => [record.ref, record.source, positions.get(record.ref)])
+    const { layoutEdges } = indexRelations(browsable)
+    publishedState ??= readPublishedPositions(positionFile)
+    const keys = new Map(browsable.map(record => [record.ref, fingerprint(record)]))
+    const published = new Map()
+    for (const [ref, digest] of keys) {
+      const entry = publishedState.get(ref)
+      if (entry?.digest === digest) published.set(ref, entry.point)
+    }
+    if (published.size === keys.size) positions = published
+    else positions = keepPublishedPositions(buildAtlas(browsable, layoutEdges), published, layoutEdges)
+    if (published.size !== keys.size || publishedState.size !== keys.size) {
+      publishedState = new Map([...keys].map(([ref, digest]) => [ref, { digest, point: positions.get(ref) }]))
+      savePublishedPositions(positionFile, publishedState)
+    }
+    const pointsByRef = new Map(browsable.map(record => [record.ref, [record.ref, record.source, positions.get(record.ref)]]))
+    overviewPoints = [...pointsByRef.values()]
+    samplePoints = sampleAtlas(browsable, pointsByRef)
     priorStamp = stamp
     revision += 1
   }
@@ -234,12 +294,12 @@ function createAtlasReader() {
     return (near ?? [0, 0, 0]).map(value => value + (random() - .5) * (near ? 20 : galaxyRadius))
   }
 
-  return (params, pointsOnly = false) => {
+  function read(params, pointsOnly = false) {
     const refs = [...new Set(params.getAll('ref'))]
     if (refs.length > 50) throw new RequestError(400, '星图补入引用过多')
     for (const ref of refs) recordRef(ref)
     reload()
-    if (pointsOnly) return { points: overviewPoints, revision }
+    if (pointsOnly) return { points: params.get('view') === '360' ? samplePoints : overviewPoints, revision }
     const edges = new Map()
     const shown = new Set(refs.filter(ref => index.has(ref)))
     if (params.get('neighbors') !== '0') {
@@ -254,6 +314,33 @@ function createAtlasReader() {
     return {
       records: [...shown].map(ref => ({ ...projectRecord(index.get(ref)), position: positionFor(ref) })),
       relations: [...edges.values()], revision,
+    }
+  }
+
+  return { read, snapshot() { reload(); return { records: index, revision } } }
+}
+
+function createSemanticReader(atlas, cache) {
+  let pending
+  return async ref => {
+    if (!cache) return { status: 'disabled', neighbors: [] }
+    recordRef(ref)
+    const { records, revision } = atlas.snapshot()
+    const record = records.get(ref)
+    if (!record) throw new RequestError(404, '原记录不存在')
+    if (record.kind === 'tool') return { status: 'ready', revision, neighbors: [] }
+    if (!pending || pending.revision < revision) {
+      if (pending?.building) return { status: 'updating', revision, neighbors: [] }
+      const job = { revision, building: true, build: buildSemanticIndex([...records.values()], cache) }
+      pending = job
+      job.build.then(() => { job.building = false }, () => { if (pending === job) pending = undefined })
+    }
+    const rank = await pending.build
+    return {
+      status: 'ready', revision,
+      neighbors: rank(ref).map(({ ref, score }) => ({
+        ...projectRecord(records.get(ref)), score, kind: 'semantic-inference',
+      })),
     }
   }
 }
@@ -273,9 +360,11 @@ async function parseBody(req) {
   }
 }
 
-export function createDashboard({ demo = false, now } = {}) {
-  const file = path.join(repoRoot(), 'dashboard', 'favorites.json')
-  const readAtlas = createAtlasReader()
+export function createDashboard({ demo = false, now, semanticCache } = {}) {
+  const directory = path.join(repoRoot(), 'dashboard')
+  const file = path.join(directory, 'favorites.json')
+  const atlas = createAtlasReader(path.join(directory, 'galaxy-positions.json'))
+  const readSemantic = createSemanticReader(atlas, semanticCache)
   const assets = new Map([...staticFiles].map(([route, [name, type]]) => [
     route, { body: fs.readFileSync(new URL(name, import.meta.url)), type },
   ]))
@@ -316,13 +405,21 @@ export function createDashboard({ demo = false, now } = {}) {
         return response(res, 200, { demo, checkedAt: Date.now(), streams: overview() })
       }
       if (method === 'GET' && url.pathname === '/api/records') {
-        return response(res, 200, { ...listRecords(params, file, now), demo })
+        return response(res, 200, { ...listRecords(params, file, now), demo, semanticEnabled: Boolean(semanticCache) })
       }
       if (method === 'GET' && url.pathname === '/api/atlas/points') {
-        return response(res, 200, readAtlas(params, true))
+        return response(res, 200, atlas.read(params, true))
       }
       if (method === 'GET' && url.pathname === '/api/atlas') {
-        return response(res, 200, readAtlas(params))
+        return response(res, 200, atlas.read(params))
+      }
+      if (method === 'GET' && url.pathname === '/api/atlas/semantic') {
+        try {
+          return response(res, 200, await readSemantic(params.get('ref')))
+        } catch (error) {
+          if (error instanceof RequestError) throw error
+          throw new RequestError(503, '语义近邻暂不可用，请检查本地模型和向量缓存')
+        }
       }
       if (method === 'GET' && url.pathname === '/api/record') {
         const record = getRecord(params.get('ref'))
@@ -361,18 +458,34 @@ export function createDashboard({ demo = false, now } = {}) {
   return server
 }
 
-function main(args) {
+async function main(args) {
   const demo = args.includes('--demo')
   const portOption = args.find(arg => arg.startsWith('--port='))
+  const modelOption = args.find(arg => arg.startsWith('--semantic-model='))
+  const check = args.includes('--check-semantic')
   const port = portOption ? Number(portOption.slice(7) || NaN) : demo ? 7332 : 7331
   if (args.includes('--help')) {
-    console.log('用法：node agent-memory/dashboard/server.mjs [--demo] [--port=7331]')
+    console.log('用法：node agent-memory/dashboard/server.mjs [--demo] [--port=7331] [--semantic-model=模型目录 [--check-semantic]]')
     return
   }
-  if (!Number.isInteger(port) || port < 0 || port > 65535 || args.some(arg => arg !== '--demo' && arg !== portOption)) {
+  if (!Number.isInteger(port) || port < 0 || port > 65535 || (check && !modelOption)
+    || args.some(arg => !['--demo', '--check-semantic', portOption, modelOption].includes(arg))) {
     console.error('参数无效。使用 --help 查看用法。')
     process.exitCode = 1
     return
+  }
+  let model
+  if (modelOption) {
+    const [{ loadLocalModel }, { evaluateSemantic }] = await Promise.all([
+      import('./semantic/model.mjs'), import('./eval-semantic.mjs'),
+    ])
+    const directory = modelOption.slice('--semantic-model='.length)
+    if (!directory) throw new Error('请提供本地模型目录')
+    model = await loadLocalModel(directory)
+    const evaluation = await evaluateSemantic(model)
+    if (check) console.log(JSON.stringify(evaluation, null, 2))
+    if (!evaluation.passed) throw new Error(`合成验收未通过（留出 ${evaluation.holdout.semantic}/${evaluation.holdout.total}），语义近邻未启用`)
+    if (check) return
   }
   let now
   if (demo) {
@@ -393,7 +506,8 @@ function main(args) {
       rows: stream.rows.map((row, index) => ({ ts: now - 3600_000 + index * 60_000, ...row })),
     })))
   }
-  const server = createDashboard({ demo, now })
+  const semanticCache = model && new EmbeddingCache(model, path.join(repoRoot(), 'dashboard', 'embedding-cache'))
+  const server = createDashboard({ demo, now, semanticCache })
   server.once('error', error => {
     console.error(`工作台启动失败（${error.code || error.name}）。可用 --port 指定端口。`)
     process.exitCode = 1
@@ -403,4 +517,9 @@ function main(args) {
   })
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2))
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).catch(error => {
+    console.error(error.message)
+    process.exitCode = 1
+  })
+}

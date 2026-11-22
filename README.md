@@ -50,6 +50,8 @@ node agent-memory/dashboard/server.mjs
 - **搜索并定位**支持关键词、逐字匹配和来源引用。匹配后镜头移到首条记录，其他命中按排名和它们与焦点的三维距离逐渐降亮。可以从搜索结果跳到分散的星点。默认星图省略工具记录，搜索时可勾选「工具」查找并定位它们。
 - **原话和证据**在选中记录后显示。证据线和侧栏指向同轮或显式引用的记录，点开即可回查原话。收藏只保存引用和校验指纹，默认位于 `~/.agent-memory/dashboard/favorites.json`，可用 `AGENT_MEMORY_HOME` 改变位置。
 
+关闭「全量星点」可切换到 360 点视图。两个视图共用已发布坐标。[Windows 本地语义近邻的安装、验收和启用](agent-memory/dashboard/SEMANTIC.md)。
+
 工作台只监听本机回环地址。三维渲染使用本地 Three.js，星点着色器移植自 [Gaia Sky](https://github.com/langurmonkey/gaiasky)，移植文件遵循随附的 [MPL-2.0](agent-memory/dashboard/gaia-sky-MPL-2.0.txt)。浏览器缺少 WebGL 2 时仍可使用检索和收藏。
 
 ## 共同的三条原则

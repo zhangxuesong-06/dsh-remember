@@ -19,6 +19,11 @@ catch (error) { console.error('记忆星图初始化失败', error) }
 const points = new Map()
 let overviewRevision
 let pendingGalaxy
+let loadedMode
+let activeHighlights = []
+let semanticEnabled = false
+const fullMap = $('full-map')
+fullMap.checked = new URLSearchParams(location.search).get('all') !== '0'
 
 for (const [id, source] of Object.entries(sources)) {
   $('source').append(new Option(source.label, id))
@@ -26,7 +31,7 @@ for (const [id, source] of Object.entries(sources)) {
   item.dataset.source = id
   $('legend').append(item)
 }
-for (const id of ['zoom-in', 'zoom-out', 'reset', 'rotation', 'links', 'focus']) $(id).disabled = !graph
+for (const id of ['zoom-in', 'zoom-out', 'reset', 'rotation', 'links', 'full-map', 'focus']) $(id).disabled = !graph
 
 function element(tag, text, className) {
   const node = document.createElement(tag)
@@ -99,7 +104,7 @@ function dateLabel(ts) {
 
 function showPoints() {
   graph?.setPoints([...points.values()])
-  $('scene-count').textContent = points.size + ' 颗记忆星点'
+  $('scene-count').textContent = (fullMap.checked ? '全量 · ' : '360 点视图 · ') + points.size + ' 颗记忆星点'
   message('map-message', points.size ? '' : '暂无可显示的记忆。')
 }
 
@@ -109,8 +114,13 @@ function loadGalaxy() {
     message('map-message', '当前浏览器无法加载三维视图，仍可以检索和管理记忆。')
     return
   }
-  pendingGalaxy ??= api('/api/atlas/points').then(snapshot => {
-    if (snapshot.revision === overviewRevision) return
+  const mode = fullMap.checked ? 'all' : '360'
+  if (pendingGalaxy?.mode === mode) return pendingGalaxy.request
+  const load = { mode }
+  pendingGalaxy = load
+  load.request = api('/api/atlas/points?view=' + mode).then(snapshot => {
+    if (pendingGalaxy !== load || (snapshot.revision === overviewRevision && loadedMode === mode)) return
+    loadedMode = mode
     points.clear()
     for (const point of snapshot.points) points.set(point[0], point)
     overviewRevision = snapshot.revision
@@ -118,9 +128,9 @@ function loadGalaxy() {
     if (selected && points.has(selected)) focus(selected)
     else graph.reset(false)
   }).catch(error => {
-    message('map-message', error.message)
-  }).finally(() => { pendingGalaxy = undefined })
-  return pendingGalaxy
+    if (pendingGalaxy === load) message('map-message', error.message)
+  }).finally(() => { if (pendingGalaxy === load) pendingGalaxy = undefined })
+  return load.request
 }
 
 async function readNeighborhood(params) {
@@ -144,6 +154,20 @@ function includeRecords(records) {
   if (changed) showPoints()
 }
 
+async function includeHighlights() {
+  if (!graph) return
+  const highlights = activeHighlights
+  const missing = highlights.filter(ref => !points.has(ref))
+  const batches = [missing.slice(0, 50), missing.slice(50, 100)].filter(batch => batch.length)
+  const additions = await Promise.all(batches.map(batch => {
+    const refs = new URLSearchParams({ neighbors: '0' })
+    for (const ref of batch) refs.append('ref', ref)
+    return readNeighborhood(refs)
+  }))
+  if (highlights !== activeHighlights) return
+  includeRecords(additions.filter(addition => addition?.revision === overviewRevision).flatMap(addition => addition.records))
+}
+
 function render(data) {
   const query = filters.get('q')
   const inResults = tab === 'results'
@@ -163,8 +187,10 @@ function render(data) {
   $('next').disabled = pages[tab] + 1 >= pageCount
   $('page').textContent = (pages[tab] + 1) + ' / ' + pageCount
   $('demo-label').hidden = !data.demo
+  semanticEnabled = data.semanticEnabled
 
-  graph?.highlights(inResults ? data.highlights ?? [] : [])
+  activeHighlights = inResults ? data.highlights ?? [] : []
+  graph?.highlights(activeHighlights)
 }
 
 async function refresh({ first = false } = {}) {
@@ -187,17 +213,8 @@ async function refresh({ first = false } = {}) {
       return
     }
     render(data)
-    if (graph && params.get('tools') === '1' && data.highlights?.length) {
-      const missing = data.highlights.filter(ref => !points.has(ref))
-      const batches = [missing.slice(0, 50), missing.slice(50, 100)].filter(batch => batch.length)
-      const additions = await Promise.all(batches.map(batch => {
-        const refs = new URLSearchParams({ neighbors: '0' })
-        for (const ref of batch) refs.append('ref', ref)
-        return readNeighborhood(refs)
-      }))
-      if (request !== requestId) return
-      includeRecords(additions.filter(addition => addition?.revision === overviewRevision).flatMap(addition => addition.records))
-    }
+    if (graph && (params.get('tools') === '1' || !fullMap.checked)) await includeHighlights()
+    if (request !== requestId) return
     if (first && priorDetail === detailId && data.records.length) select(data.records[0].ref, data.mode === 'recall')
   } catch (error) {
     if (request === requestId) message('message', error.message)
@@ -272,6 +289,9 @@ async function select(ref, wide = false) {
   message('detail-message', '正在读取原话…')
   $('details').parentElement.scrollTop = 0
   renderRelated(ref, [], [])
+  $('semantic').hidden = true
+  message('semantic-status', '')
+  $('semantic-items').replaceChildren()
   graph?.neighbors([])
   if (points.has(ref)) focus(ref, wide)
   const params = new URLSearchParams({ ref })
@@ -292,7 +312,35 @@ async function select(ref, wide = false) {
   }).catch(error => {
     if (request === detailId) message('message', '证据关系加载失败 · ' + error.message)
   })
-  await Promise.all([original, neighborhood])
+  if (semanticEnabled) {
+    message('semantic-status', '正在计算语义近邻…')
+    $('semantic').hidden = false
+  }
+  const semantic = semanticEnabled && api('/api/atlas/semantic?' + params).then(async snapshot => {
+    if (request !== detailId) return
+    if (snapshot.status === 'updating') {
+      message('semantic-status', '账本有新记录。可重新打开此条记忆以检查语义近邻。')
+      $('semantic').hidden = false
+      return
+    }
+    await neighborhood
+    if (request !== detailId) return
+    const results = snapshot.status === 'ready' && (!graph || snapshot.revision === overviewRevision) ? snapshot.neighbors : []
+    message('semantic-status', '')
+    $('semantic').hidden = !results.length
+    $('semantic-items').replaceChildren(...results.map(record => {
+      const button = element('button', undefined, 'relation')
+      button.type = 'button'
+      button.append(element('span', `${record.ref} · 余弦 ${record.score.toFixed(2)}`), element('span', record.preview, 'preview'))
+      button.addEventListener('click', () => select(record.ref))
+      const item = element('li')
+      item.append(button)
+      return item
+    }))
+  }).catch(error => {
+    if (request === detailId) message('semantic-status', error.message)
+  })
+  await Promise.all([original, neighborhood, semantic])
 }
 
 function setTab(next) {
@@ -312,6 +360,7 @@ $('search').addEventListener('submit', event => {
   if ($('tools').checked) filters.set('tools', '1')
   pages.results = 0
   closeDetail()
+  activeHighlights = []
   graph?.highlights([])
   refresh({ first: Boolean(filters.get('q')) })
 })
@@ -323,7 +372,13 @@ $('refresh').addEventListener('click', async () => {
 })
 $('zoom-in').addEventListener('click', () => graph?.zoom(1.23))
 $('zoom-out').addEventListener('click', () => graph?.zoom(1 / 1.23))
-$('reset').addEventListener('click', () => { graph?.highlights([]); closeDetail() })
+$('reset').addEventListener('click', () => { activeHighlights = []; graph?.highlights([]); closeDetail() })
+fullMap.addEventListener('change', async () => {
+  const priorDetail = detailId
+  await loadGalaxy()
+  try { await includeHighlights() } catch (error) { message('map-message', error.message) }
+  if (priorDetail === detailId && selected) select(selected)
+})
 $('links').addEventListener('change', event => graph?.links(event.target.checked))
 $('close-detail').addEventListener('click', closeDetail)
 $('focus').addEventListener('click', () => { if (selected) focus(selected) })

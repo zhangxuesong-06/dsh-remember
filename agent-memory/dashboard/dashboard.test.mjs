@@ -8,10 +8,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { createDashboard } from './server.mjs'
+import { EmbeddingCache } from './semantic.mjs'
 
 const original = '原始答复\n  保留缩进 <script>原话</script>  '
 
-async function fixture(t) {
+async function fixture(t, semanticCache) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'memory-dashboard-test-'))
   const before = Object.fromEntries(['AGENT_MEMORY_HOME', 'CODEX_MEMORY_HOME'].map(key => [key, process.env[key]]))
   process.env.AGENT_MEMORY_HOME = root
@@ -31,11 +32,11 @@ async function fixture(t) {
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(path.join(dir, 'stream.jsonl'), JSON.stringify({ who: 'me', type: 'assistant/message', text: workspace }) + '\n')
   }
-  const server = createDashboard()
+  const server = createDashboard({ semanticCache })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   t.after(async () => {
-    await new Promise(resolve => server.close(resolve))
+    if (server.listening) await new Promise(resolve => server.close(resolve))
     for (const [key, value] of Object.entries(before)) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
@@ -43,7 +44,7 @@ async function fixture(t) {
     await fs.rm(root, { recursive: true, force: true })
   })
   const url = `http://127.0.0.1:${server.address().port}`
-  return { log, url, request: (route, opts) => fetch(url + route, opts), root }
+  return { log, url, server, request: (route, opts) => fetch(url + route, opts), root }
 }
 
 function digest(bytes) {
@@ -144,17 +145,22 @@ test('rejects cross-origin or invalid input and serves only known assets', async
 })
 
 test('full map includes every browsable reference and sends only lightweight positions', async t => {
-  const { log, request } = await fixture(t)
+  const { log, request, server } = await fixture(t)
   const recent = Array.from({ length: 410 }, (_, i) => JSON.stringify({
     who: 'user', type: 'user/message', sid: 'many', ts: 10000 + i, text: '较新的记录',
   })).join('\n')
   await fs.appendFile(log, recent + '\n')
   const { total } = await (await request('/api/records')).json()
-  const { points } = await (await request('/api/atlas/points')).json()
+  const { points, revision } = await (await request('/api/atlas/points')).json()
   assert.equal(points.length, total)
   assert.ok(points.every(([ref, source, position]) => ref && source && position.length === 3))
   assert.ok(!points.some(([ref]) => ref === 'codex:6'))
   const byRef = new Map(points.map(([ref,,position]) => [ref,position]))
+  const sampled = await (await request('/api/atlas/points?view=360')).json()
+  assert.equal(sampled.points.length, 360)
+  assert.equal(sampled.revision, revision)
+  assert.ok(sampled.points.some(([ref]) => ref === 'dsh:robot:1'))
+  for (const [ref,,position] of sampled.points) assert.deepEqual(position, byRef.get(ref))
   assert.ok(byRef.has('dsh:robot:1') && byRef.has('dsh:sim:1') && byRef.has('codex:3'))
   const scene = await (await request('/api/atlas?ref=codex:3')).json()
   assert.equal(scene.records.length, 2)
@@ -169,6 +175,23 @@ test('full map includes every browsable reference and sends only lightweight pos
   assert.equal((await request('/gaia-star-shaders.mjs')).status, 200)
   assert.equal((await request('/vendor/OrbitControls.js')).status, 200)
   assert.equal((await request('/vendor/3d-force-graph.js')).status, 404)
+  assert.deepEqual(await (await request('/api/atlas/semantic?ref=codex:3')).json(), { status: 'disabled', neighbors: [] })
+  await fs.appendFile(log, JSON.stringify({ who: 'assistant', type: 'assistant/message', sid: 'one', turn: 0, text: '新证据' }) + '\n')
+  const updated = await (await request('/api/atlas/points')).json()
+  assert.equal(updated.revision, revision + 1)
+  assert.equal(updated.points.length, total + 1)
+  for (const [ref,,position] of updated.points.filter(([ref]) => byRef.has(ref))) {
+    assert.deepEqual(position, byRef.get(ref))
+  }
+  const added = updated.points.find(([ref]) => ref === 'codex:417')[2]
+  assert.ok(Math.hypot(...added.map((value, axis) => value - byRef.get('codex:3')[axis])) < 35)
+  await new Promise(resolve => server.close(resolve))
+  const restarted = createDashboard()
+  restarted.listen(0, '127.0.0.1')
+  await once(restarted, 'listening')
+  t.after(() => new Promise(resolve => restarted.close(resolve)))
+  const reloaded = await fetch(`http://127.0.0.1:${restarted.address().port}/api/atlas/points`).then(res => res.json())
+  assert.deepEqual(reloaded.points, updated.points)
 })
 
 test('tool points can be promoted on demand with canonical reference search', async t => {
@@ -201,4 +224,39 @@ test('derived summary links its stored IDs to physical records and leaves other 
     return (await response.json()).text
   })))
   assert.deepEqual(new Set(originals),new Set(['阶段摘要','任务原话','结果原话']))
+})
+
+
+test('semantic suggestions use physical refs without mutating evidence, ledger or coordinates', async t => {
+  const texts = []
+  const cache = new EmbeddingCache({ dimension: 2, embed: async input => {
+    texts.push(...input)
+    return input.map(() => [1, 0])
+  } })
+  const { request, log } = await fixture(t, cache)
+  const before = await fs.readFile(log)
+  const all = await (await request('/api/atlas/points')).json()
+  const evidence = await (await request('/api/atlas?ref=codex:3')).json()
+  const reply = await (await request('/api/atlas/semantic?ref=codex:3')).json()
+  assert.equal(reply.status, 'ready')
+  assert.equal(reply.revision, all.revision)
+  assert.deepEqual(reply.neighbors.map(({ ref, kind, score }) => [ref, kind, score]), [
+    ['codex:1', 'semantic-inference', 1], ['codex:5', 'semantic-inference', 1],
+  ])
+  assert.equal(reply.neighbors.some(item => Object.hasOwn(item, 'evidence')), false)
+  for (const ref of ['codex:3', ...reply.neighbors.map(item => item.ref)]) {
+    const target = await request('/api/record?ref=' + ref)
+    assert.equal(target.status, 200)
+    assert.ok((await target.json()).text)
+  }
+  assert.equal((await (await request('/api/record?ref=codex:3')).json()).text, original)
+  for (const ref of ['dsh:robot:1', 'dsh:sim:1', 'codex:6']) {
+    assert.deepEqual((await (await request('/api/atlas/semantic?ref='+ref)).json()).neighbors, [])
+  }
+  assert.equal((await request('/api/atlas/semantic?ref=codex:92')).status, 404)
+  assert.equal(texts.length, 5)
+  assert.ok(!texts.includes('原始工具'))
+  assert.deepEqual(await (await request('/api/atlas/points')).json(), all)
+  assert.deepEqual(await (await request('/api/atlas?ref=codex:3')).json(), evidence)
+  assert.deepEqual(await fs.readFile(log), before)
 })

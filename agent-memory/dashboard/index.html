@@ -28,6 +28,7 @@
         <button type="button" id="zoom-out" title="缩小" aria-label="缩小">−</button>
         <button type="button" id="reset" class="fit" title="回到全景" aria-label="回到全景"><span aria-hidden="true">⌾</span></button>
         <label class="links"><input id="rotation" type="checkbox">自转</label>
+        <label class="links"><input id="full-map" type="checkbox" checked>全量星点</label>
         <label class="links" title="选中记忆时显示该条记录的证据线"><input id="links" type="checkbox" checked>证据线</label>
       </div>
     </main>
@@ -61,7 +62,8 @@
             <button type="button" id="copy">复制引用</button>
             <button type="button" id="focus">重新定位</button>
           </div>
-          <div id="related" class="related" hidden><h2>相关记忆</h2><ul id="related-items"></ul></div>
+          <div id="related" class="related" hidden><h2>账本证据</h2><ul id="related-items"></ul></div>
+          <div id="semantic" class="related" hidden><h2>语义近邻 · 推断</h2><p id="semantic-status" class="detail-message" role="status" hidden></p><ul id="semantic-items"></ul></div>
         </section>
         <ul id="items" class="items"></ul>
       </div>

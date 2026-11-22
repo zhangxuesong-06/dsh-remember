@@ -1,0 +1,7 @@
+{
+  "name": "agent-memory-atlas-semantic",
+  "private": true,
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1"
+  }
+}
