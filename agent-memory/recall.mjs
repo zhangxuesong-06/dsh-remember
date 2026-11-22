@@ -16,6 +16,7 @@ const DAY = 864e5
 const K1 = 1.25
 const B = 0.72
 const MIN_COVERAGE = 0.2
+export const LONG_TEXT_RANK = Object.freeze({ b: 0.45 })
 
 const WHO = { he: 'user', me: 'assistant', act: 'action', meta: 'meta' }
 const KIND = {
@@ -106,9 +107,9 @@ export function sources() {
   return loadAll({ withTools: true }).stores
 }
 
-function recency(ts, now) {
+function recency(ts, now, boost, halfLifeDays) {
   const days = Math.max(0, (now - (ts || now)) / DAY)
-  return 1 + 0.5 * Math.pow(0.5, days / 3)
+  return 1 + boost * Math.pow(0.5, days / halfLifeDays)
 }
 
 function multiplier(rec) {
@@ -133,14 +134,8 @@ function passes(rec, opts) {
   return true
 }
 
-export function recall(query, opts = {}) {
-  const { n = 8, now = Date.now() } = opts
-  const qterms = [...new Set(tok(query))]
-  if (!qterms.length) return []
-  const { records, stores } = loadAll({ withTools: !!opts.withTools })
+export function createRecallSearch({ records, stores }, opts = {}) {
   const pool = records.filter((r) => passes(r, opts))
-  if (!pool.length) return []
-
   const N = pool.length
   const post = new Map()
   const dl = new Array(N)
@@ -159,40 +154,54 @@ export function recall(query, opts = {}) {
   })
   const avg = total / N || 1
 
-  const sc = new Map()
-  const hitCount = new Map()
-  for (const term of qterms) {
-    const a = post.get(term)
-    if (!a) continue
-    const df = a.length / 2
-    const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5))
-    for (let i = 0; i < a.length; i += 2) {
-      const id = a[i], tf = a[i + 1], L = dl[id] || 1
-      sc.set(id, (sc.get(id) || 0) + idf * ((tf * (K1 + 1)) / (tf + K1 * (1 - B + B * L / avg))))
-      hitCount.set(id, (hitCount.get(id) || 0) + 1)
+  return function search(query, { n = 8, now = Date.now(), rank = {}, exclude } = {}) {
+    const qterms = [...new Set(tok(query))]
+    const {
+      minCoverage = MIN_COVERAGE, recencyBoost = 0.5, halfLifeDays = 3,
+      coveragePower = 0, b = B, k1 = K1,
+    } = rank
+    const scores = new Map()
+    const hitCount = new Map()
+    for (const term of qterms) {
+      const posting = post.get(term)
+      if (!posting) continue
+      const df = posting.length / 2
+      const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5))
+      for (let index = 0; index < posting.length; index += 2) {
+        const id = posting[index], frequency = posting[index + 1], length = dl[id] || 1
+        const termScore = idf * ((frequency * (k1 + 1)) / (frequency + k1 * (1 - b + b * length / avg)))
+        scores.set(id, (scores.get(id) || 0) + termScore)
+        hitCount.set(id, (hitCount.get(id) || 0) + 1)
+      }
     }
-  }
 
-  const scored = []
-  for (const [i, bm25] of sc) {
-    const rec = pool[i]
-    const coverage = (hitCount.get(i) || 0) / qterms.length
-    if (coverage < MIN_COVERAGE) continue
-    scored.push({ ...rec, score: bm25 * recency(rec.ts, now) * multiplier(rec), coverage: +coverage.toFixed(2) })
-  }
-  scored.sort((a, b) => b.score - a.score)
+    const scored = []
+    for (const [index, bm25] of scores) {
+      const rec = pool[index]
+      const coverage = hitCount.get(index) / qterms.length
+      if (coverage < minCoverage || exclude?.(rec)) continue
+      const score = bm25 * recency(rec.ts, now, recencyBoost, halfLifeDays) * multiplier(rec) * coverage ** coveragePower
+      scored.push({ ...rec, score, coverage: +coverage.toFixed(2) })
+    }
+    scored.sort((left, right) => right.score - left.score)
 
-  const seen = new Set()
-  const out = []
-  for (const rec of scored) {
-    const key = dedupeKey(rec)
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(rec)
-    if (out.length >= n) break
+    const seen = new Set()
+    const out = []
+    for (const rec of scored) {
+      const key = dedupeKey(rec)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(rec)
+      if (out.length >= n) break
+    }
+    if (out.length) out.stores = stores
+    return out
   }
-  if (out.length) out.stores = stores
-  return out
+}
+
+export function recall(query, opts = {}) {
+  if (!tok(query).length) return []
+  return createRecallSearch(loadAll({ withTools: !!opts.withTools }), opts)(query, opts)
 }
 
 export function trace(text, opts = {}) {
@@ -246,7 +255,7 @@ function parseSince(v) {
   return Number.isFinite(t) ? t : null
 }
 
-function flags(args) {
+function flags(args, withRank = false) {
   const o = { n: 8, source: null, since: null, ws: null, withTools: false, json: false, rest: [] }
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
@@ -256,6 +265,12 @@ function flags(args) {
     else if (a === '--ws') o.ws = args[++i] || null
     else if (a === '--with-tools') o.withTools = true
     else if (a === '--json') o.json = true
+    else if (a === '--rank' && withRank) {
+      const name = args[++i]
+      if (name === 'long-text') o.rank = LONG_TEXT_RANK
+      else if (name === 'default') o.rank = {}
+      else return null
+    }
     else o.rest.push(a)
   }
   return o
@@ -273,7 +288,12 @@ function main() {
   const argv = process.argv.slice(2)
   const cmd = argv.shift()
   if (cmd === 'recall') {
-    const o = flags(argv)
+    const o = flags(argv, true)
+    if (!o) {
+      console.error('--rank 可选 default 或 long-text。')
+      process.exitCode = 2
+      return
+    }
     const query = o.rest.join(' ').trim()
     if (!query) { console.error('用法：agent-memory/recall.mjs recall "查询"'); process.exit(1) }
     const hits = recall(query, o)
@@ -317,7 +337,7 @@ function main() {
     return
   }
   console.log('用法：')
-  console.log('  node agent-memory/recall.mjs recall "查询" [-n 8] [--source dsh] [--since 7d] [--ws 目录] [--with-tools] [--json]')
+  console.log('  node agent-memory/recall.mjs recall "查询" [-n 8] [--source dsh] [--since 7d] [--ws 目录] [--rank default|long-text] [--with-tools] [--json]')
   console.log('  node agent-memory/recall.mjs trace "原话片段" [--source dsh] [--json]')
   console.log('  node agent-memory/recall.mjs show <source>:<line>')
   console.log('  node agent-memory/recall.mjs sources')

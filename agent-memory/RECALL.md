@@ -90,6 +90,7 @@ node agent-memory/recall.mjs sources
 node agent-memory/recall.mjs recall "kgnav 孤岛" -n 8
 node agent-memory/recall.mjs recall "题库" --source workbuddy --since 30d
 node agent-memory/recall.mjs recall "派生索引" --with-tools --json
+node agent-memory/recall.mjs recall "长回复中的线索" --rank long-text
 node agent-memory/recall.mjs trace "扫码走局域网"
 node agent-memory/recall.mjs show dsh:812
 ```
@@ -105,6 +106,8 @@ BM25(K1=1.25, B=0.72) × 新鲜加分 × 类别权重
 新鲜加分 = 1 + 0.5 × 0.5^(天数/3)
 覆盖率阈值 0.2
 ```
+
+`--rank long-text` 把 BM25 的长度归一化参数 `b` 从默认的 0.72 降到 0.45，减轻长记录的排序惩罚。搜索结果继续带完整原文引用。用 `--rank default` 可按默认参数查询。
 
 类别权重：普通记录 1.0 · artifact 0.85 · episode 0.55 · meta 会话标题 0.4 · 工具行 0.35。
 
@@ -127,6 +130,17 @@ node agent-memory/eval-recall.mjs --check
 评测用固定时钟和临时账本，从五个来源一起召回。题目给出改述问句和人工指定的原文引用。工具按引用核对完整正文、角色、会话和已有的轮次标识，再按目标在结果里的位置计算 Hit@3 和 MRR@8。排行与原文回读分开记录。没有可靠轮次标识的旧格式仍按明确的原文引用评分。
 
 `--json` 输出逐题的来源、排名、原文回读结果和候选记录。 `--check` 与 `fixtures/recall-baseline.json` 比较，题目变更、结果变动或原文回读异常时以退出码 1 报出题号。基线保留一条已知的改述漏召回题，便于比较后续改动。输入都来自 `fixtures/recall-cases.json`，真实库评测另行运行。
+
+### 本机账本调参
+
+```bash
+node agent-memory/eval-live.mjs
+node agent-memory/eval-live.mjs --at "2026-11-21T12:00:00+08:00"
+```
+
+脚本只读当前账本，复用一个索引比较默认排序与覆盖率、长度归一化和新鲜度的候选参数。按来源把较早会话放入调参组，较晚会话放入留出组。每个会话的每类题最多抽 12 道。输出只有总体和分来源计数、命中率、MRR@8 及空结果数。
+
+回答题用原始提问找有明确轮次归属的助手回复，查询时排除重复的提问原文。短线索题从原文截取较短片段，按完整来源引用判定命中。两种题衡量有词面线索时的表现，改述召回仍使用上面的固定评测。`--at` 固定新鲜度计算的时间。账本继续追加后，样本和结果可能变化。
 
 ### 历史记录
 

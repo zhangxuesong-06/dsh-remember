@@ -104,6 +104,16 @@ test('--source / --since / --ws 过滤生效', () => {
   assert.equal(cross.recall('quiz-bank.json', { ws: '不存在的目录' }).length, 0)
 })
 
+test('复用检索索引可替换排序参数，并在去重前排除已知输入', () => {
+  const query = 'quiz-bank.json 不存在词'
+  const search = cross.createRecallSearch(cross.loadAll(), { source: 'workbuddy' })
+  assert.deepEqual(search(query, { now: NOW }), cross.recall(query, { source: 'workbuddy', now: NOW }))
+  const hits = search(query, { n: 1, now: NOW, exclude: (record) => record.line !== 2 })
+  assert.equal(hits[0].who, 'assistant')
+  assert.equal(cross.refOf(hits[0]), 'workbuddy:2')
+  assert.deepEqual(search(query, { rank: { minCoverage: 1 } }), [])
+})
+
 test('工具行默认搜不到，--with-tools 能搜到', () => {
   assert.equal(cross.recall('cat').length, 0)
   assert.ok(cross.recall('cat', { withTools: true }).length > 0)
@@ -244,4 +254,20 @@ test('CLI --json 可解析，人类输出带来源', () => {
   const show = spawnSync(process.execPath, [cli, 'show', 'dsh:2'], { env, encoding: 'utf8', windowsHide: true })
   assert.equal(show.status, 0, show.stderr)
   assert.match(show.stdout, /271 个里有 270 个/)
+})
+
+test('CLI 可选长文排序，引用仍回到同一条原话', () => {
+  const cli = path.join(here, 'recall.mjs')
+  const run = (...args) => spawnSync(process.execPath, [cli, 'recall', ...args], { encoding: 'utf8' })
+  const result = run('缓存方案', '--source', 'opencode', '--rank', 'long-text', '--json')
+  assert.equal(result.status, 0, result.stderr)
+  const { hits } = JSON.parse(result.stdout)
+  assert.ok(hits.length > 1)
+  for (const hit of hits) assert.equal(cross.readAt(hit.source, hit.line).text, hit.text)
+  const defaultResult = run('缓存方案', '--source', 'opencode', '--rank', 'default', '--json')
+  assert.equal(defaultResult.status, 0, defaultResult.stderr)
+  const defaultScores = new Map(JSON.parse(defaultResult.stdout).hits.map((hit) => [hit.line, hit.score]))
+  assert.ok(hits.some((hit) => Math.abs(hit.score - defaultScores.get(hit.line)) > 0.001))
+  assert.equal(run('缓存方案', '--rank', 'unknown').status, 2)
+  assert.equal(run('缓存方案', '--rank').status, 2)
 })
