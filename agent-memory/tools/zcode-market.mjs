@@ -1,8 +1,4 @@
-// 生成本地插件市场 hx-local（superpowers + zcode-memory），并把它注册给 ZCode。
-//
-// 为什么要有这一步：ZCode 的 extraKnownMarketplaces 只负责「让市场可见」，
-// 真正的安装（复制到 cache、写 installed_plugins.json）必须由客户端走一次安装流程。
-// 所以这里把「市场」准备好，剩下的在 Settings → Plugin Management 里点一次 Install。
+// 生成 ZCode 本地市场并安装记忆插件。用 --with-superpowers 同时安装独立的技能包。
 //
 // 用法：
 //   node agent-memory/tools/zcode-market.mjs --dry-run
@@ -11,10 +7,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
+import { buildPackage, replacePackage } from './build-package.mjs'
 
-const HERE = path.dirname(fileURLToPath(import.meta.url))
-const REPO = path.resolve(HERE, '..', '..')
 const HOME = os.homedir()
 
 const MARKET_ID = 'hx-local'
@@ -29,6 +23,7 @@ const SUPERPOWERS_LICENSE = path.join(HOME, '.agents', 'skills', 'superpowers', 
 
 const dry = process.argv.includes('--dry-run')
 const noInstall = process.argv.includes('--no-install')
+const withSuperpowers = process.argv.includes('--with-superpowers')
 const INSTALLED = path.join(PLUGIN_ROOT, 'installed_plugins.json')
 
 function log(msg) { console.log((dry ? '[dry-run] ' : '') + msg) }
@@ -56,13 +51,12 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file)
 }
 
-function copyTree(src, dest, exclude = new Set()) {
+function copyTree(src, dest) {
   fs.mkdirSync(dest, { recursive: true })
   for (const ent of fs.readdirSync(src, { withFileTypes: true })) {
-    if (exclude.has(ent.name)) continue
     const from = path.join(src, ent.name)
     const to = path.join(dest, ent.name)
-    if (ent.isDirectory()) copyTree(from, to, exclude)
+    if (ent.isDirectory()) copyTree(from, to)
     else if (ent.isFile()) fs.copyFileSync(from, to)
   }
 }
@@ -72,83 +66,68 @@ function buildSuperpowers() {
     throw new Error(`找不到 superpowers 技能目录：${SUPERPOWERS_SRC}\n先确认 ~/.agents/skills/superpowers/references/skills 存在。`)
   }
   const dest = path.join(MARKET_ROOT, 'plugins', 'superpowers')
-  if (!dry) {
-    fs.rmSync(dest, { recursive: true, force: true })
-    fs.mkdirSync(path.join(dest, '.zcode-plugin'), { recursive: true })
-  }
   const names = fs.readdirSync(SUPERPOWERS_SRC, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
   log(`superpowers：${names.length} 个技能 → ${path.join(dest, 'skills')}`)
   if (!dry) {
-    for (const name of names) copyTree(path.join(SUPERPOWERS_SRC, name), path.join(dest, 'skills', name))
-    if (fs.existsSync(SUPERPOWERS_LICENSE)) fs.copyFileSync(SUPERPOWERS_LICENSE, path.join(dest, 'LICENSE-superpowers.txt'))
-    writeJsonAtomic(path.join(dest, '.zcode-plugin', 'plugin.json'), {
-      name: 'superpowers',
-      version: '1.0.0',
-      description: '把想法做成可靠软件的开发方法论：brainstorm → 设计 → 拆任务 → TDD → 子 Agent 实现 → 代码审查 → 收尾。移植自 obra/superpowers（MIT）。',
-      author: { name: 'Jesse Vincent (obra/superpowers), ported' },
-      license: 'MIT',
-      skills: './skills',
+    replacePackage(dest, (staging) => {
+      for (const name of names) copyTree(path.join(SUPERPOWERS_SRC, name), path.join(staging, 'skills', name))
+      if (fs.existsSync(SUPERPOWERS_LICENSE)) fs.copyFileSync(SUPERPOWERS_LICENSE, path.join(staging, 'LICENSE-superpowers.txt'))
+      writeJsonAtomic(path.join(staging, '.zcode-plugin', 'plugin.json'), {
+        name: 'superpowers',
+        version: '1.0.0',
+        description: '把想法做成可靠软件的开发方法论：brainstorm → 设计 → 拆任务 → TDD → 子 Agent 实现 → 代码审查 → 收尾。移植自 obra/superpowers（MIT）。',
+        author: { name: 'Jesse Vincent (obra/superpowers), ported' },
+        license: 'MIT',
+        skills: './skills',
+      })
     })
   }
-  return names.length
 }
 
 function buildMemory() {
-  const src = path.join(REPO, 'zcode-memory')
   const dest = path.join(MARKET_ROOT, 'plugins', 'zcode-memory')
-  if (!fs.existsSync(path.join(src, '.zcode-plugin', 'plugin.json'))) {
-    throw new Error(`找不到插件源码：${src}`)
-  }
   log(`zcode-memory → ${dest}`)
-  if (!dry) {
-    fs.rmSync(dest, { recursive: true, force: true })
-    fs.mkdirSync(dest, { recursive: true })
-    // test.mjs 不进插件；它是开发期自测，运行时用不到。
-    for (const item of ['package.json', 'README.md', 'lib', 'bin', 'tools', 'hooks', 'skills', '.zcode-plugin', '.mcp.json']) {
-      const from = path.join(src, item)
-      if (!fs.existsSync(from)) continue
-      if (fs.statSync(from).isDirectory()) copyTree(from, path.join(dest, item))
-      else fs.copyFileSync(from, path.join(dest, item))
-    }
-  }
+  if (!dry) buildPackage('zcode', dest)
 }
 
-function marketplace() {
-  return {
-    name: MARKET_ID,
-    description: '本地自用插件：superpowers 技能包 + zcode-memory 长期记忆。',
-    plugins: [
-      {
-        name: 'superpowers',
-        source: './plugins/superpowers',
-        version: '1.0.0',
-        description: '把想法做成可靠软件的开发方法论（移植自 obra/superpowers，MIT）。',
-        category: 'productivity',
-        listing: { displayName: 'Superpowers', displayNameI18n: { 'zh-CN': 'Superpowers 方法论' } },
-      },
-      {
-        name: 'zcode-memory',
-        source: './plugins/zcode-memory',
-        version: '0.1.0',
-        description: '跨会话长期记忆：自动落盘、按线索回想、可溯源，与其它 harness 共用 ~/.agent-memory。',
-        category: 'productivity',
-        listing: { displayName: 'ZCode Memory', displayNameI18n: { 'zh-CN': 'ZCode 长期记忆' } },
-      },
-    ],
-  }
+function requestedPlugins() {
+  const plugins = [{
+    name: 'zcode-memory',
+    source: './plugins/zcode-memory',
+    version: '0.1.0',
+    description: '跨会话长期记忆：自动落盘、按线索回想、可溯源，与其它 harness 共用 ~/.agent-memory。',
+    category: 'productivity',
+    listing: { displayName: 'ZCode Memory', displayNameI18n: { 'zh-CN': 'ZCode 长期记忆' } },
+  }]
+  if (withSuperpowers) plugins.push({
+    name: 'superpowers',
+    source: './plugins/superpowers',
+    version: '1.0.0',
+    description: '把想法做成可靠软件的开发方法论（移植自 obra/superpowers，MIT）。',
+    category: 'productivity',
+    listing: { displayName: 'Superpowers', displayNameI18n: { 'zh-CN': 'Superpowers 方法论' } },
+  })
+  return plugins
 }
 
-function register() {
-  const market = marketplace()
-  log(`写市场清单：${path.join(MARKET_ROOT, 'marketplace.json')} 与 ${MANIFEST_COPY}`)
+function register(requested) {
+  const manifest = path.join(MARKET_ROOT, 'marketplace.json')
+  const previous = readJson(manifest, { plugins: [] })
+  const listing = new Map(previous.plugins.map((plugin) => [plugin.name, plugin]))
+  for (const plugin of requested) listing.set(plugin.name, plugin)
+  const market = { ...previous, name: MARKET_ID, description: previous.description || '本地 ZCode 插件。', plugins: [...listing.values()] }
+  log(`写市场清单：${manifest} 与 ${MANIFEST_COPY}`)
   if (!dry) {
-    writeJsonAtomic(path.join(MARKET_ROOT, 'marketplace.json'), market)
-    writeJsonAtomic(MANIFEST_COPY, market)
     // 关键：客户端读的是缓存目录里的清单，而里面的 source 是相对路径。
     // 只复制 marketplace.json 不够，插件树必须一起进去，否则
     // 解析 ./plugins/<name> 时找不到，报 "Unsupported or missing plugin source"。
     const cacheMarket = path.dirname(MANIFEST_COPY)
-    copyTree(path.join(MARKET_ROOT, 'plugins'), path.join(cacheMarket, 'plugins'))
+    for (const { name } of requested) {
+      replacePackage(path.join(cacheMarket, 'plugins', name), (staging) =>
+        copyTree(path.join(MARKET_ROOT, 'plugins', name), staging))
+    }
+    writeJsonAtomic(manifest, market)
+    writeJsonAtomic(MANIFEST_COPY, market)
     log(`市场缓存同步：${path.join(cacheMarket, 'plugins')}`)
   }
 
@@ -184,19 +163,18 @@ function register() {
     if (bak) log('  备份：' + bak)
     writeJsonAtomic(CONFIG, cfg)
   }
-  return market
 }
 
 // 直接安装：复制到 cache/<market>/<name>/<version>，写 installed_plugins.json，
 // 并在 enabledPlugins 里打开。等价于客户端「Install」按钮走的那一步。
-function install(market) {
+function install(requested) {
   if (noInstall) { log('跳过安装（--no-install）'); return }
   const db = readJson(INSTALLED, { version: 1, plugins: [] })
   const list = Array.isArray(db.plugins) ? db.plugins : []
   const now = new Date().toISOString()
   const enabled = []
 
-  for (const p of market.plugins) {
+  for (const p of requested) {
     const version = p.version || '0.0.0'
     const rel = String(p.source).replace(/^\.\//, '')
     const src = path.join(MARKET_ROOT, ...rel.split('/'))
@@ -205,8 +183,7 @@ function install(market) {
     log(`安装 ${id} v${version} → ${dest}`)
     if (dry) continue
     if (!fs.existsSync(src)) throw new Error(`插件源不存在：${src}`)
-    fs.rmSync(dest, { recursive: true, force: true })
-    copyTree(src, dest)
+    replacePackage(dest, (staging) => copyTree(src, staging))
 
     const entry = {
       id,
@@ -244,12 +221,13 @@ function install(market) {
 
 try {
   log(`市场根：${MARKET_ROOT}`)
-  const n = buildSuperpowers()
+  if (withSuperpowers) buildSuperpowers()
   buildMemory()
-  const market = register()
-  install(market)
+  const requested = requestedPlugins()
+  register(requested)
+  install(requested)
   log('')
-  log(`完成。superpowers ${n} 个技能；两个插件都在 ${MARKET_ID} 市场里。`)
+  log(`已准备 ${MARKET_ID} 市场：${requested.map(({ name }) => name).join('、')}`)
   if (noInstall) {
     log('下一步（--no-install）：在 Settings → Plugin Management → Discover → hx-local 里手动安装。')
   } else {

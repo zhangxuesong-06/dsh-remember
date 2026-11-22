@@ -39,19 +39,16 @@ $backup = "$pkgFile.bak-$stamp"
 Copy-Item $pkgFile $backup -Force
 Write-Host "已备份 profile -> $backup"
 
-# 2) 复制插件（零依赖，不需要 npm install）
-if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-New-Item -ItemType Directory -Path $dest -Force | Out-Null
-$exclude = @('.git', 'node_modules', '*.txt')
-robocopy $src $dest /E /XD .git node_modules /XF 's2.txt' 's3.txt' 'smoke-out.txt' '_loadcheck.mjs' /NFL /NDL /NJH /NJS | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "复制失败（robocopy exit $LASTEXITCODE）" }
+# 2) 按 package.json 的发布清单组装插件
+$build = Join-Path $src '..\agent-memory\tools\build-package.mjs'
+node $build dsh $dest
+if ($LASTEXITCODE -ne 0) { throw "打包失败（node exit $LASTEXITCODE）" }
 Write-Host "插件已复制。"
 
 # 3) 加进 bundles（幂等）
-Push-Location $dest
 $patch = Join-Path $dest 'tools\patch-profile.mjs'
 node $patch $profDir 'dsh-memory'
-Pop-Location
+if ($LASTEXITCODE -ne 0) { throw "更新 profile 失败（node exit $LASTEXITCODE）" }
 
 # 4) 生成 config
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir -Force | Out-Null }

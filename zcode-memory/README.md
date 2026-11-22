@@ -6,6 +6,8 @@
 数据落在 `~/.agent-memory/zcode/`，与 OpenCode、DSH、WorkBuddy 共用同一个库；
 跨库查询见 `agent-memory/recall.mjs`。
 
+从仓库根运行 `node agent-memory/install.mjs --harness zcode` 安装。制作独立发布目录时，运行 `node agent-memory/tools/build-package.mjs zcode <输出目录>`，由打包器写入共用运行模块。
+
 ## 组成
 
 | 部分 | 作用 |

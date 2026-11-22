@@ -24,7 +24,7 @@ node agent-memory/install.mjs --dry-run --json
 | `dsh` | `~/.dsh/profiles/desktop/package.json`、`~/.dsh/dsh-memory/config.json` | `node agent-memory/install.mjs --harness dsh --workspace "<工作区>"` | 重启 DSH |
 | `opencode` | `~/.config/opencode/opencode.json`、`~/.opencode-mem/` | `node agent-memory/install.mjs --harness opencode` | 配置热加载；必要时 `/reload` |
 | `workbuddy` | `~/.workbuddy/settings.json`、`~/.workbuddy/skills/self-memory/` | `node agent-memory/install.mjs --harness workbuddy` | 重开 WorkBuddy |
-| `zcode` | `~/.zcode/cli/config.json`、`~/.agent-memory/zcode/` | `node agent-memory/install.mjs --harness zcode` | 生成 hx-local 市场并在插件市场里安装 `zcode-memory`，重启 ZCode |
+| `zcode` | `~/.zcode/cli/config.json`、`~/.agent-memory/zcode/` | `node agent-memory/install.mjs --harness zcode` | 生成 hx-local 市场并安装 `zcode-memory`，重启 ZCode |
 | `codex` | `~/.codex/config.toml`（或 `CODEX_HOME`） | `node agent-memory/install.mjs --harness codex` | 安装本地 `codex-memory`，然后在 Codex 审阅钩子 |
 
 `--dry-run` 只打印计划，不写文件。正式安装前先跑一次，确认 `adapter` 路径和动作对。

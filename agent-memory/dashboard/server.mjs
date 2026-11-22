@@ -4,6 +4,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { gzipSync } from 'node:zlib'
 import { coverage } from '../coverage.mjs'
 import { writeStreams } from '../eval-recall.mjs'
 import { loadAll, parseRef, readAt, recall, refOf, trace } from '../recall.mjs'
@@ -36,15 +37,26 @@ class RequestError extends Error {
   }
 }
 
-function response(res, status, data, type = 'application/json') {
+function response(res, status, data, type = 'application/json', headers = {}) {
   res.writeHead(status, {
     'Content-Type': `${type}; charset=utf-8`,
     'Cache-Control': 'no-store',
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     'Referrer-Policy': 'no-referrer',
     'X-Content-Type-Options': 'nosniff',
+    ...headers,
   })
   res.end(type === 'application/json' ? JSON.stringify(data) : data)
+}
+
+function acceptsGzip(header) {
+  const encodings = new Map()
+  for (const entry of (header ?? '').toLowerCase().split(',')) {
+    const [name, parameter] = entry.split(';').map((part) => part.trim())
+    const quality = parameter === undefined ? 1 : Number(/^q\s*=\s*(.+)$/.exec(parameter)?.[1])
+    if (quality >= 0 && quality <= 1) encodings.set(name, quality)
+  }
+  return (encodings.get('gzip') ?? encodings.get('*') ?? 0) > 0
 }
 
 function recordRef(ref) {
@@ -275,7 +287,7 @@ export function createDashboard({ demo = false, now } = {}) {
   for (const [name, relative] of threeAssets) {
     const source = fs.readFileSync(new URL('node_modules/three/' + relative, import.meta.url), 'utf8')
     const body = name === 'OrbitControls.js' ? source.replace("from 'three'", "from './three.module.js'") : source
-    assets.set('/vendor/' + name, { body, type: 'text/javascript' })
+    assets.set('/vendor/' + name, { body, gzip: gzipSync(body), type: 'text/javascript' })
   }
   const server = http.createServer(async (req, res) => {
     const origin = `http://${host}:${server.address().port}`
@@ -291,6 +303,13 @@ export function createDashboard({ demo = false, now } = {}) {
       if (url.origin !== origin) throw new RequestError(403, '请从本机工作台访问')
       if (method === 'GET' && assets.has(url.pathname)) {
         const asset = assets.get(url.pathname)
+        if (asset.gzip) {
+          const headers = { Vary: 'Accept-Encoding' }
+          if (acceptsGzip(req.headers['accept-encoding'])) {
+            return response(res, 200, asset.gzip, asset.type, { ...headers, 'Content-Encoding': 'gzip' })
+          }
+          return response(res, 200, asset.body, asset.type, headers)
+        }
         return response(res, 200, asset.body, asset.type)
       }
       if (method === 'GET' && url.pathname === '/api/overview') {

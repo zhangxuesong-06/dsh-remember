@@ -165,13 +165,13 @@ node agent-memory/coverage.mjs --worst
 
 ## zcode-memory（ZCode）
 
-ZCode 只能通过插件（skills + hooks + MCP）扩展，所以这一版是把 `dsh-memory` 的内核（只增不改的流、切段、BM25、锚/唤醒/到达/事实块、证据）搬到 ZCode 的宿主壳里，数据照样进 `~/.agent-memory/zcode/`。
+ZCode 使用 skills、hooks 和 MCP 扩展。它与 `dsh-memory` 共用分词、切段、检索和证据文件操作，各自处理宿主事件。数据写入 `~/.agent-memory/zcode/`。
 
 ```bash
-node agent-memory/install.mjs --harness zcode   # 生成 ~/.zcode/local-marketplace 并注册
+node agent-memory/install.mjs --harness zcode
 ```
 
-之后在 **Settings → Plugin Management → Discover → hx-local** 里安装 `zcode-memory`（同一个市场里还有 `superpowers`），完全退出并重启 ZCode。
+安装器生成 `hx-local` 市场并启用 `zcode-memory`。完全退出并重启 ZCode 后加载插件。需要同时安装 Superpowers 时，运行 `node agent-memory/tools/zcode-market.mjs --with-superpowers`。
 
 钩子挂 6 个事件：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Stop`。钩子进程只做追加（与库大小无关），检索放在常驻 MCP 里（每次调用前按字节偏移尾同步）。工具是 `recall` / `trace` / `remember` / `memory_stats` / `memory_read`。
 
@@ -192,7 +192,7 @@ cd workbuddy-memory
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-安装脚本会复制 `bin/mem.mjs`、`bin/mem-evidence.mjs` 和 `SKILL.md`，并在 `~/.workbuddy/settings.json` 里挂五个 hook：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`。改前自动备份 settings，已有的无关 hook 原样保留。**要重开一次 WorkBuddy 才生效。**
+安装脚本复制运行脚本与技能，并在 `~/.workbuddy/settings.json` 里挂六个 hook（`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`、`SubagentStop`）。更新前备份 settings。重新打开 WorkBuddy 后加载插件。
 
 数据在 `~/.workbuddy/mem/`：`stream.jsonl` 是原文，`blobs/` 是完整工具证据和文件版本，`integrity.json` 是字节基线，`pending.json` 负责跨进程的工具前后配对。默认不截断文本；只有配置显式打开 `truncate` 才按 `capChars` 截。检索优先走 `index.db`（SQLite FTS5 派生索引），索引缺失/损坏时自动回退到全量读取；`index.db` 可以删除重建，原文不动。
 

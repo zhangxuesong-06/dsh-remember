@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { gunzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { once } from 'node:events'
@@ -48,6 +49,26 @@ async function fixture(t) {
 function digest(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
 }
+
+test('vendor assets compress when accepted without changing their JavaScript', async t => {
+  const { url } = await fixture(t)
+  const read = (encoding) => new Promise((resolve, reject) => {
+    http.get(url + '/vendor/three.core.js', { headers: { 'Accept-Encoding': encoding } }, async res => {
+      try {
+        const parts = []
+        for await (const chunk of res) parts.push(chunk)
+        resolve({ headers: res.headers, data: Buffer.concat(parts) })
+      } catch (error) { reject(error) }
+    }).on('error', reject)
+  })
+  const raw = await read('gzip;q=0, *;q=0.5')
+  const zipped = await read('br, gzip')
+  assert.equal(raw.headers['content-encoding'], undefined)
+  assert.equal(zipped.headers['content-encoding'], 'gzip')
+  assert.equal(zipped.headers.vary, 'Accept-Encoding')
+  assert.ok(zipped.data.length < raw.data.length / 2)
+  assert.deepEqual(gunzipSync(zipped.data), raw.data)
+})
 
 test('dashboard lists five sources and preserves physical references in coverage and recall', async t => {
   const { request } = await fixture(t)

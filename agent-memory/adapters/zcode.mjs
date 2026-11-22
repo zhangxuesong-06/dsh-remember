@@ -17,8 +17,7 @@ export function plan({ repoRoot }) {
     adapter: path.join(repoRoot, 'zcode-memory'),
     command: [process.execPath, path.join(repoRoot, 'agent-memory', 'tools', 'zcode-market.mjs')],
     cwd: repoRoot,
-    note: '生成 ~/.zcode/local-marketplace（superpowers + zcode-memory）并注册到用户配置；'
-      + '之后在 Settings → Plugin Management → Discover 里安装 zcode-memory，完全退出并重启 ZCode。',
+    note: '生成 ~/.zcode/local-marketplace，安装并启用 zcode-memory。完全退出并重启 ZCode。',
     verify: ['node', path.join(repoRoot, 'zcode-memory', 'bin', 'cli.mjs'), 'verify'],
   }
 }

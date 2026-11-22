@@ -25,7 +25,10 @@ const files = pkg.files || []
 
 // 按设计不进包的，每条都要有理由；**没理由的豁免不许写**
 const EXEMPT = [
-  { re: /^tools\//, why: '维护者工具（验-脱敏要读包外的禁词表，给用户是死文件）' },
+  { re: /^tools\/验-.*\.mjs$/, why: '开发和发布检查' },
+  { re: /^(?:selftest|smoke|evidence-test|session-file\.test|subagent\.test)\.mjs$/, why: '开发期自测' },
+  { re: /^(?:install|uninstall)\.ps1$/, why: '从源码目录执行的安装入口' },
+  { re: /^(?:snapout|snapreal)\.txt$/, why: '本地验证输出' },
   { re: /^package\.json$/, why: 'npm 强制打包，不用列进 files[]' },
   { re: /\.bak$/i, why: '备份文件' },
   { re: /^denylist.*\.txt$/i, why: '真名字表，绝不能进包' },
@@ -42,21 +45,22 @@ function walk(dir, out = []) {
   return out
 }
 
-const covered = (f) => files.some((pat) => {
-  if (pat.endsWith('/*.mjs')) return f.startsWith(pat.slice(0, -6)) && f.endsWith('.mjs')
-  if (pat.endsWith('/*.json')) return f.startsWith(pat.slice(0, -7)) && f.endsWith('.json')
-  return f === pat
-})
+const listed = new Set(files)
 const exemptOf = (f) => EXEMPT.find((e) => e.re.test(f))
 
 const all = walk(ROOT)
+const invalid = files.filter((f) => !all.includes(f) || exemptOf(f))
+if (invalid.length) {
+  console.error('清单包含缺失文件或开发期文件：' + invalid.join('、'))
+  process.exit(1)
+}
 const hit = []
 const exempt = []
 const miss = []
 for (const f of all) {
   const ex = exemptOf(f)
   if (ex) { exempt.push({ f, why: ex.why }); continue }
-  if (covered(f)) hit.push(f)
+  if (listed.has(f)) hit.push(f)
   else miss.push(f)
 }
 
