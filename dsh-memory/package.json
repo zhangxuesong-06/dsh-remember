@@ -25,6 +25,8 @@
     "lib/evidence-files.mjs",
     "lib/evidence.mjs",
     "lib/mem-recall.mjs",
+    "lib/memory-cards.mjs",
+    "lib/memory-case-index.mjs",
     "lib/retrieve.mjs",
     "lib/session-file.mjs",
     "lib/signal.mjs",

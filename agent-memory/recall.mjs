@@ -10,7 +10,9 @@
 // 这样跨库结果之间才可比。分词来自 mem-tokenize.mjs，不 import mem-core。
 import { pathToFileURL } from 'node:url'
 import { tok } from '../tools/mem-tokenize.mjs'
-import { readStream, streams } from './repo.mjs'
+import { codexRoot, readStream, streams } from './repo.mjs'
+import { caseSource, caseCommand, caseProject, caseRead, caseResult } from '../dsh-memory/lib/memory-case-index.mjs'
+import path from 'node:path'
 import { QUOTE_SIZE, compactLimit, compactQuotes, createTextSearch, quoteFor as quote, serializeRange, speakerOf } from '../tools/mem-recall.mjs'
 
 const DAY = 864e5
@@ -300,5 +302,34 @@ function main() {
   console.log('  node agent-memory/recall.mjs sources')
 }
 
+function casesCLI([command, ...args]) {
+  const querying = command === 'recall' && args.includes('--cases')
+  const reading = command === 'show' && args[0]?.startsWith('case:')
+  if (!querying && !reading) return caseCommand(caseSource('codex', codexRoot()), command, [])
+  const pos = args.indexOf('--source')
+  if (pos < 0) return caseCommand(caseSource('codex', codexRoot(), process.cwd()), command, args)
+  let source
+  try {
+    const alias = args[pos + 1]
+    const config = JSON.parse(process.env.MEMORY_CASE_SOURCES || '{}')
+    const entry = Object.hasOwn(config, alias) && config[alias]
+    if (entry && ['opencode', 'codex', 'dsh', 'workbuddy', 'zcode'].includes(entry.adapter)
+      && path.isAbsolute(entry.root) && path.isAbsolute(entry.fromProject) && path.isAbsolute(entry.project)
+      && caseProject(entry.fromProject) === caseProject(process.cwd())) {
+      const project = entry.adapter === 'dsh' ? entry.root : entry.project
+      source = caseSource(entry.adapter, entry.root, project, { singleProject: entry.adapter === 'dsh' })
+    }
+  } catch {}
+  if (!source) return JSON.stringify({ state: 'denied' })
+  const words = args.filter((_, i) => i !== pos && i !== pos + 1)
+  if (querying) return caseResult(source, words.filter(arg => arg !== '--cases').join(' '))
+  const range = words.indexOf('--range')
+  return caseRead(source, words[0], range < 0 ? undefined : words[range + 1] ?? '')
+}
+
 const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
-if (isMain) main()
+if (isMain) {
+  const output = casesCLI(process.argv.slice(2))
+  if (output === null) main()
+  else console.log(output)
+}

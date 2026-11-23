@@ -1,0 +1,36 @@
+{
+  "evaluation": [
+    ["export-retry", "tool", "export_id"],
+    ["import-resume", "tool", "import_cursor"],
+    ["unchanged-write", "tool", "content_hash"],
+    ["lock-recovery", "tool", "owner_pid"],
+    ["timezone-offset", "tool", "timestamp_ms"],
+    ["late-event", "tool", "event_id"],
+    ["copy-with-unicode", "tool", "utf16_offset"],
+    ["duplicate-alert", "tool", "alert_id"],
+    ["explicit-test-queue", "prompt", "queue_id"],
+    ["explicit-test-image", "prompt", "image_id"],
+    ["explicit-test-migration", "prompt", "migration_id"],
+    ["explicit-test-rollback", "prompt", "version_id"],
+    ["missing-history", "none", "job_id"],
+    ["tool-never-exposes-anchor", "unobservable", "attempt_id"],
+    ["direct-write", "unobservable", "save_id"],
+    ["parallel-read-write", "unobservable", "batch_id"],
+    ["foreign-project", "foreign", "schema_id"],
+    ["renamed-test", "wrong-anchor", "config_id"],
+    ["wrong-test-path", "wrong-path", "handler_id"],
+    ["superseded-fix", "corrected", "state_id"],
+    ["pending-correction", "pending-correction", "rule_id"],
+    ["invalid-evidence", "corrupt", "item_id"],
+    ["observed-only", "observed", "request_id"],
+    ["ambiguity", "ambiguous", "message_id"]
+  ],
+  "tuning": [
+    ["new-session", "tool", "session_id"],
+    ["new-prompt", "prompt", "prompt_id"],
+    ["same-word-other-root", "foreign", "result_id"],
+    ["old-case-retracted", "corrected", "report_id"],
+    ["single-word-only", "unobservable", "cache_id"],
+    ["no-runner-evidence", "observed", "test_id"]
+  ]
+}

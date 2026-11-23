@@ -15,6 +15,7 @@ const files = [
   'codex-memory/hook.mjs',
   'agent-memory/recall.mjs',
   'agent-memory/repo.mjs',
+  ...['memory-cards.mjs', 'memory-case-index.mjs', 'tokenize.mjs'].map(name => 'dsh-memory/lib/' + name),
   'tools/mem-tokenize.mjs',
   ['dsh-memory/lib/mem-recall.mjs', 'tools/mem-recall.mjs'],
   'tools/mem-journal.mjs',

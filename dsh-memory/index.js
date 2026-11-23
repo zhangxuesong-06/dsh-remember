@@ -32,6 +32,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { Ledger } from './lib/store.mjs'
+import { caseSource, caseResult, caseRead, startCaseSync } from './lib/memory-case-index.mjs'
 import { serializeRange } from './lib/mem-recall.mjs'
 import {
   loadCfg, workspaceDir, workspaceLine, diag, SESSIONS_DIR, CFG_PATH,
@@ -113,6 +114,7 @@ export function apply(ctx) {
   const mounted = new Set()
   const held = new Set()      // 多线文件夹里没登记的会话（只喊一次）
   const settleTimers = new Map()
+  const caseWorkers = new Map()
   const compactNotes = new Map() // sid -> { tokens, from, to, at, delivered }
   const turnStamp = new Map()    // sid -> 走到第几个回合（预激活只按回合算，不按 step 算）
   const subagentTasks = new Set() // 子代理会话 -> 已经写过任务提示（每场只写一次）
@@ -157,6 +159,13 @@ const idleTurns = new Map()    // sid -> 连续没浮的轮数
     const t = setTimeout(() => {
       settleTimers.delete(key)
       try { l.seal(); l.saveState() } catch (e) { diag('settle 出错：' + (e && e.message)) }
+      if (!caseWorkers.has(key)) {
+        const worker = startCaseSync('dsh', key)
+        if (worker) {
+          caseWorkers.set(key, worker)
+          worker.on('close', () => caseWorkers.delete(key))
+        }
+      }
     }, 2500)
     if (t && typeof t.unref === 'function') t.unref()
     settleTimers.set(key, t)
@@ -555,6 +564,7 @@ function recallTool(ledger, cfg, sid) {
         full: { type: 'boolean', description: '要全文：默认单条超过 300 字会截成「头 210 + …… + 尾 70」，这一步不截。' },
         passage: { type: 'boolean', description: '按原文窗口排名，返回紧凑摘录。' },
         compact: { type: 'boolean', description: '只返回限量摘录、角色和原文位置。' },
+        cases: { type: 'boolean', description: '查询当前账本的短条目。' },
       },
       additionalProperties: false,
     },
@@ -573,6 +583,9 @@ function recallTool(ledger, cfg, sid) {
       }
 
       const query = String(a.query || '').trim()
+      if (query && a.cases === true) {
+        return { text: caseResult(caseSource('dsh', ledger.dir, ledger.dir, { singleProject: true }), query) }
+      }
       const when = String(a.when || '').trim()
       if (query && !full && (a.passage || a.compact)) {
         return { text: ledgerQuotes(ledger, query, { passages: a.passage, when, recency: cfg.recency }) }
@@ -791,6 +804,9 @@ function readTool(ledger, cfg) {
       const a = args || {}
       let rec = null
       const ref = a.ref ? String(a.ref).replace(/^#/, '') : ''
+      if (ref.startsWith('case:')) {
+        return { text: caseRead(caseSource('dsh', ledger.dir, ledger.dir, { singleProject: true }), ref, a.range) }
+      }
       if (Number.isInteger(a.id)) rec = ledger.fullRecord(a.id)
       else if (/^\d+$/.test(ref)) rec = ledger.fullRecord(Number(ref))
       else if (/^[a-f0-9]{64}$/.test(ref)) {

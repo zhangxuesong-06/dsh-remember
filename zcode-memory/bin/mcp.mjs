@@ -10,11 +10,13 @@ import { recallBlock, ledgerQuotes, traceBlock } from '../lib/assemble.mjs'
 import { serializeRange } from '../lib/mem-recall.mjs'
 import { mark } from '../lib/journal.mjs'
 import { readBlob } from '../lib/evidence.mjs'
+import { caseSource, caseResult, caseRead } from '../lib/memory-case-index.mjs'
 
 const VERSION = '0.1.0'
 const PROTOCOL = '2024-11-05'
 
 let ledger = null
+const currentCaseSource = () => caseSource('zcode', HOME, process.env.ZCODE_PROJECT_DIR || process.cwd())
 function db() {
   if (!ledger) ledger = new Ledger(HOME).open()
   else ledger.syncTail()
@@ -33,6 +35,7 @@ const TOOLS = [
         full: { type: 'boolean', description: 'true 时展开该段更多原文。' },
         passage: { type: 'boolean', description: '按原文窗口排名，返回紧凑摘录。' },
         compact: { type: 'boolean', description: '只返回限量摘录、角色和原文位置。' },
+        cases: { type: 'boolean', description: '查询当前项目的短条目。' },
       },
       required: ['query'],
     },
@@ -89,6 +92,7 @@ function callTool(name, args = {}) {
   const cfg = loadCfg()
   if (name === 'recall') {
     const query = String(args.query || '').trim()
+    if (query && args.cases === true) return text(caseResult(currentCaseSource(), query))
     if (!query && args.episode === undefined) return text('recall 需要 query 或 episode。', true)
     if (query && !Number.isInteger(args.episode) && !args.full && (args.passage || args.compact)) {
       return text(ledgerQuotes(db(), query, { passages: args.passage, recency: cfg.recency }))
@@ -127,6 +131,7 @@ function callTool(name, args = {}) {
     return text(lines.join('\n'))
   }
   if (name === 'memory_read') {
+    if (typeof args.id === 'string' && args.id.startsWith('case:')) return text(caseRead(currentCaseSource(), args.id, args.range))
     const id = String(args.id || '').trim()
     if (/^\d+$/.test(id)) {
       const rec = db().fullRecord(Number(id))

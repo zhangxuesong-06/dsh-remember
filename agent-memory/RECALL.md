@@ -35,6 +35,41 @@
 
 DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收对话、笔记、决策、段落、产物；工具行用 `--with-tools` 显式打开。
 
+## 案例短条目试验
+
+五端在原事件落盘后，用共用规则生成工具观察、显式决定、约束、纠正和任务短条目。打开 `MEMORY_CASE_RECALL=manual` 后，轮次或工具收尾的后台同步会更新派生索引。查询直接读取已存条目。含 `case:` 的引用定位源行，支持 `--range start:end` 逐字回读，偏移为 UTF-16 零基且末端不计入。长证据默认返回前 12,000 个 UTF-16 码元以内的完整字符，并附下一段范围 `next` 和总长度 `total`。`observed` 表示已观察到的记录，`verified` 当前限于符合版本与退出码校验的 OpenCode 单项 Node TAP 回归。缺少真实轮次的用户原话可以保留为独立观察。
+
+| 宿主 | 查询和回读 |
+| --- | --- |
+| OpenCode | `node tools/mem.mjs recall "export_id" --cases`，`node tools/mem.mjs show "<case 引用>"`。模型使用 `mem.recall` 的 `cases: true` 和 `mem.read`。 |
+| Codex | `node agent-memory/recall.mjs recall "export_id" --cases`，`node agent-memory/recall.mjs show "<case 引用>"`。 |
+| DSH | 当前账本的 `memory_recall` 传 `cases: true`，`memory_read` 传引用。CLI 使用 `node dsh-memory/cli.mjs recall "<工作区>" "export_id" --cases`。 |
+| WorkBuddy | `node workbuddy-memory/bin/mem.mjs recall "export_id" --cases`，同脚本 `show "<case 引用>"`。 |
+| ZCode | `node zcode-memory/bin/cli.mjs recall "export_id" --cases`，同脚本 `show "<case 引用>"`。MCP 也支持 `cases: true` 和引用回读。 |
+
+运行命令时，当前目录决定项目范围，DSH 沿用已选择的账本。旧 WorkBuddy 记录若只有目录末段，可通过旧召回查找。默认返回三条，最多五条，JSON 上限为 3,072 UTF-8 字节。索引需要 SQLite 和 FTS5，`unavailable` 或 `stale` 时可用原有 `recall`、`trace` 和 `show`。
+
+共享 CLI 的 `--source` 可指向显式登记的别名。`MEMORY_CASE_SOURCES` 接收 JSON，例如 `{"old":{"adapter":"opencode","root":"C:/isolated/ledger","project":"C:/isolated/previous","fromProject":"C:/isolated/current"}}`。在 `fromProject` 用 `recall "export_id" --cases --source old` 查询，并用 `show "<case 引用>" --source old` 回读。撤去别名即撤回后续访问。DSH 别名的 `root` 指单独的工作区或身份线账本。
+
+OpenCode 的 `auto` 是试验开关。插件只在当前项目根的任务开始或读到测试锚点后查找已验证案例。匹配要求测试路径、名称和当前测试文件版本一致。首次可能写入后跳过首次提示。模拟宿主测试覆盖压缩请求后的补发。每次提示最多 512 UTF-8 字节，每轮合计最多 1,536 字节。实际宿主送达及整题模型收益见本地工作报告的验收状态。
+
+OpenCode 可用 `node tools/mem-maintenance.mjs --root "<账本目录>" --case-index-sync` 或 `--case-index-rebuild` 维护案例索引。其余四端在上述 CLI 使用 `case-index-sync` 或 `case-index-rebuild`，DSH 在命令后附工作区。关闭试验时设 `MEMORY_CASE_RECALL=off` 或清除这个变量。日常原文查询仍可访问源账本。
+
+### 三组模型对照
+
+`node agent-memory/eval-cases.mjs --check` 验证规则命中。用 `node agent-memory/eval-cases.mjs --check --input "<模型试验结果.json>"` 校验整题对照。输入为 `{"runs":[...]}`。每条运行记录填写下表字段。
+
+| 字段 | 取值 |
+| --- | --- |
+| `scenario`、`repetition` | `fixtures/memory-cases.json` 留出集中的场景 ID，每个场景至少做第 1、2、3 次 |
+| `mode` | `baseline` 为已有召回，`manual` 为已存短条目，`auto` 为自动提示加手动入口 |
+| `model`、`snapshot` | 每个配对试验使用相同模型和同一仓库快照 |
+| `correctReuse`、`wrongReuse`、`testPassed` | 布尔值，记录修改前是否正确复用、是否误用，以及最终测试是否通过 |
+| `outOfScope`、`exactEvidence` | 布尔值，记录是否出现越界提示以及实际回读的引用是否逐字一致 |
+| `inputTokens` | 此次任务的实际输入 token 总量，包含重复上下文 |
+
+报告汇总三组的复用、失败和 token 指标。自动组相对手动组须提升至少 15 个百分点，误用和测试失败不得增加，平均输入 token 至多与两对照组持平，p95 至多为原召回组的 105%。全部记录须满足作用域和证据要求。宿主送达及安装资源仍需各自验收。
+
 ## 捕获完整性
 
 ```bash

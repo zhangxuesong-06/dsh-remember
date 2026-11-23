@@ -281,6 +281,7 @@ console.log('11) 从 ZCode 数据库回填')
 
   const bfEnv = { ...env, ZCODE_DB: dbFile }
   const first = cli(['backfill', '--session', 'sess_bf'], bfEnv)
+  if (first.code !== 0) throw new Error(first.stderr || `backfill exited with ${first.code}`)
   const firstJson = JSON.parse(first.stdout)
   ok('回填三条缺失回答', first.code === 0 && firstJson.filled === 3, first.stdout.slice(0, 160))
   ok('库里没有正文的窗口只计数', firstJson.noText === 1)

@@ -22,13 +22,14 @@ export default Plugin.define({
         'mem-core.mjs', 'mem-journal.mjs', 'mem-artifacts.mjs', 'mem-facets.mjs', 'mem-assoc.mjs',
         'mem-tokenize.mjs', 'mem-recall.mjs', 'mem-capture.mjs', 'mem-context.mjs', 'mem-plugin.mjs', 'mem-maintenance.mjs',
       ]
-      const names = RUNTIME.slice().sort()
-      for (const name of names) {
+      const shared = ['memory-cards.mjs', 'memory-case-index.mjs', 'memory-case-hint.mjs', 'tokenize.mjs']
+      const names = [...RUNTIME, ...shared].sort()
+      for (const name of RUNTIME) {
         if (!fs.existsSync(path.join(TOOLS, name))) throw new Error('Runtime module missing: ' + name)
       }
       const unlisted = fs.readdirSync(TOOLS).filter((n) => /^mem-.*\.mjs$/.test(n) && !RUNTIME.includes(n))
       if (unlisted.length) throw new Error('Runtime module not listed: ' + unlisted.join(', '))
-      const files = names.map((name) => [name, fs.readFileSync(name === 'mem-recall.mjs'
+      const files = names.map((name) => [name, fs.readFileSync(name === 'mem-recall.mjs' || shared.includes(name)
         ? path.resolve(TOOLS, '../dsh-memory/lib', name) : path.join(TOOLS, name))])
       const digest = createHash('sha256')
       for (const [name, bytes] of files) digest.update(name).update('\0').update(bytes).update('\0')

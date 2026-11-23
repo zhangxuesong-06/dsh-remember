@@ -26,6 +26,7 @@ import { anchorBlock, primingBlock, recallBlock, ledgerQuotes, traceBlock, arriv
 import { recallFlags, serializeRange } from './lib/mem-recall.mjs'
 import { search, priming } from './lib/retrieve.mjs'
 import { readBlob } from './lib/evidence.mjs'
+import { caseSource, caseCommand } from './lib/memory-case-index.mjs'
 
 const [cmd, cwd, ...rest] = process.argv.slice(2)
 if (!cmd || !cwd) {
@@ -37,6 +38,11 @@ const cfg = { ...loadCfg(), workspaces: [cwd] }
 // 多线文件夹：用 HIPPO_LINE=<线名> 指定看哪条
 const lineName = process.env.HIPPO_LINE || null
 const dir = workspaceDir(cwd, lineName)
+const caseOutput = caseCommand(caseSource('dsh', dir, dir, { singleProject: true }), cmd, rest)
+if (caseOutput !== null) {
+  console.log(caseOutput)
+  process.exit(process.exitCode || 0)
+}
 // lines 子命令自己会开库；别为它凭空造一个空库出来
 const ledger = cmd === 'lines' ? null : new Ledger(dir, { meetingGapMs: cfg.meetingGapMs }).open()
 

@@ -23,12 +23,13 @@
 // 参数：--ws <工作区子串>  --limit n  --full
 
 import { readFileSync, appendFileSync, existsSync, mkdirSync, statSync, writeFileSync, unlinkSync } from 'node:fs'
-import { join, dirname, resolve } from 'node:path'
+import { isAbsolute, join, dirname, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { atomicWrite, createIntegrity, putBlob, readBlob, snapshot, artifactPaths, sha256, verifyBlobs, resolveRoot } from './mem-evidence.mjs'
 import { buildIndex, appendIndex, searchIndex, indexStore, episodesByIds, indexBuiltAt, indexFresh } from './mem-index.mjs'
 import { compactLimit, compactQuotes, compactRecall, recallFlags, serializeRange } from './mem-recall.mjs'
+import { caseSource, caseCommand, startCaseSync } from './memory-case-index.mjs'
 
 // 库根走 mem-evidence.resolveRoot：hook、CLI、维护进程共用同一个判断。
 const ROOT = resolveRoot()
@@ -267,11 +268,13 @@ function append(cwd, rec) {
     ts,
     who: rec.who,
     ws: rec.ws || wsOf(cwd),
+    ...(isAbsolute(cwd) ? { workspace: cwd } : {}),
     sid: rec.sid || null,
     turn: rec.turn ?? null,
     text,
     tool: rec.tool || null,
     type: rec.type || null,
+    ...(text !== String(rec.text || '') ? { coverage: 'sample' } : {}),
     hash: sha256(text),
     id: rec.id || sha256(ts + '|' + rec.who + '|' + text).slice(0, 16),
   }
@@ -1024,7 +1027,7 @@ function runHook() {
     if (!tokenize(prompt).length) return
     const messageID = p.message_id || p.prompt_id || null
     append(cwd, {
-      who: 'he', sid, text: prompt, type: 'user/message', messageID,
+      who: 'he', sid, text: prompt, type: 'user/message', messageID, turnID: p.turn_id,
       eventKey: messageID ? `user:${sid || ''}:${messageID}` : null,
       source: { type: 'hook.user_prompt', messageID },
     })
@@ -1077,10 +1080,11 @@ function runHook() {
     if (!text) return
     const messageID = p.message_id || p.assistant_message_id || null
     append(cwd, {
-      who: 'me', sid, text, type: 'assistant/message', messageID,
+      who: 'me', sid, text, type: 'assistant/message', messageID, turnID: p.turn_id,
       eventKey: messageID ? `assistant:${sid || ''}:${messageID}` : null,
       source: { type: 'hook.stop', messageID },
     })
+    if (process.env.WORKBUDDY_DISABLE_MAINTENANCE !== '1') startCaseSync('workbuddy', ROOT)
     return
   }
 }
@@ -1101,6 +1105,11 @@ for (let i = 0; i < argv.length; i++) {
 
 const [cmd, ...args] = rest
 const here = process.cwd()
+const caseOutput = caseCommand(caseSource('workbuddy', ROOT, here), cmd, args)
+if (caseOutput !== null) {
+  console.log(caseOutput)
+  process.exit(process.exitCode || 0)
+}
 const quoteFlags = cmd === 'recall' ? recallFlags(args) : null
 const quotesOnly = !flags.full && (quoteFlags?.compact || quoteFlags?.passages)
 

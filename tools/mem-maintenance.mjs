@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createJournal, scanFile } from './mem-journal.mjs'
 import { verifyBlobs } from './mem-artifacts.mjs'
+import { caseSource, runCaseSync } from './memory-case-index.mjs'
 
 const SMALL = [
   'stream.jsonl', 'tools.jsonl', 'episodes.jsonl', 'marks.jsonl',
@@ -207,6 +208,16 @@ function due() {
 }
 
 function main() {
+  if (has('case-index-sync') || has('case-index-rebuild')) {
+    if (!arg('root')) throw new Error('案例索引维护需要显式 --root')
+    const result = lock(() => {
+      if (has('case-index-rebuild') && createJournal(root).verify().status === 'BAD') return { state: 'stale' }
+      return runCaseSync(caseSource('opencode', root), has('case-index-rebuild'))
+    })
+    console.log(JSON.stringify(result))
+    if (result.state !== 'ready') process.exitCode = 1
+    return
+  }
   if (has('due')) {
     const r = due()
     console.log(JSON.stringify(r, null, 2))

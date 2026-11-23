@@ -5,6 +5,9 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex')
+function stamp(stat) {
+  return { identity: `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`, mtime: stat.mtimeMs, ctime: stat.ctimeMs }
+}
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 const FILES = ['stream.jsonl', 'tools.jsonl', 'episodes.jsonl', 'marks.jsonl']
 
@@ -123,6 +126,7 @@ export function createJournal(root) {
       }
       for (const [name, d] of pending) {
         state.files[name] = { bytes: d.bytes.length, sha256: sha256(d.bytes), records: d.rows.length,
+          ...(d.bytes.length ? stamp(fs.statSync(path.join(root, name))) : {}),
           baselineAt: state.files[name]?.baselineAt || new Date().toISOString() }
       }
       atomicWrite(checkpoint, state)
@@ -155,9 +159,11 @@ export function createJournal(root) {
       const line = Buffer.from(separator + JSON.stringify(row) + '\n', 'utf8')
       const file = path.join(root, name)
       const fd = fs.openSync(file, 'a', 0o600)
-      try { fs.writeFileSync(fd, line); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+      let stat
+      try { fs.writeFileSync(fd, line); fs.fsyncSync(fd); stat = fs.fstatSync(fd) } finally { fs.closeSync(fd) }
       const bytes = Buffer.concat([d.bytes, line])
       state.files[name] = { bytes: bytes.length, sha256: sha256(bytes), records: d.rows.length + 1,
+        ...stamp(stat),
         baselineAt: state.files[name]?.baselineAt || new Date().toISOString() }
       atomicWrite(checkpoint, state)
       return row

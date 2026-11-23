@@ -87,7 +87,7 @@ export function append(rec, opts = {}) {
     type: rec.type || null,
     hash: sha256(text),
   }
-  for (const key of ['id', 'eventKey', 'messageID', 'turnID', 'source', 'evidence', 'versions',
+  for (const key of ['id', 'eventKey', 'messageID', 'turnID', 'source', 'evidence', 'versions', 'workspace',
     'files', 'status', 'artifact', 'completion', 'callId', 'path']) {
     if (rec[key] !== undefined && rec[key] !== null) d[key] = rec[key]
   }

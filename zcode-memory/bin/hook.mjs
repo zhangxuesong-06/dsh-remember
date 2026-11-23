@@ -13,6 +13,7 @@ import { Ledger } from '../lib/store.mjs'
 import { anchorBlock, arrivalBlock, emotionCueBlock, factsBlock, primingBlock } from '../lib/assemble.mjs'
 import { assistantRecords, failToolRecords, fields, postToolRecords, preToolRecords, titleRecord, userRecords } from '../lib/events.mjs'
 import { loadSession, saveSession } from '../lib/sessions.mjs'
+import { startCaseSync } from '../lib/memory-case-index.mjs'
 
 const RULE = [
   '【先分清归属，再开口】',
@@ -169,6 +170,7 @@ function main() {
         const recs = assistantRecords(f)
         if (!recs.length) diag(`stop 空正文：sid=${f.sid || '?'} turn=${f.turn || '?'}（可用 tools/backfill.mjs 回填）`)
         appendAll(recs)
+        if (process.env.ZCODE_DISABLE_MAINTENANCE !== '1') startCaseSync('zcode', HOME)
       }
       break
     }

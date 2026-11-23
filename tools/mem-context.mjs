@@ -9,6 +9,9 @@ export const excerpt = (text, max = 240) => {
 }
 export function injectBackground(event, text) {
   const block = `<memory-background>\n${GUARD}\n${text}\n</memory-background>`
+  return injectBlock(event, block)
+}
+export function injectBlock(event, block, { systemFallback = true } = {}) {
   const messages = [...(event.messages || [])]
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
@@ -23,7 +26,10 @@ export function injectBackground(event, text) {
     event.messages = messages
     return 'user'
   }
-  event.system = [...(event.system || []), { type: 'text', text: block }]
+  if (!systemFallback) return null
+  if (!event.system?.some(part => part?.text === block)) {
+    event.system = [...(event.system || []), { type: 'text', text: block }]
+  }
   return 'system'
 }
 export function memoryPage(row, { offset = 0, limit = 12000, range } = {}) {

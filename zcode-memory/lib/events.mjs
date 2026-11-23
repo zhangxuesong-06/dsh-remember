@@ -5,6 +5,7 @@
 import { HOME, inScope, wsNameOf, wsOf } from './config.mjs'
 import { artifactPaths, putBlob, sha256, snapshot } from './evidence.mjs'
 import { putPending, takePending } from './pending.mjs'
+import { isAbsolute } from 'node:path'
 
 const pick = (p, ...names) => {
   for (const n of names) if (p[n] !== undefined && p[n] !== null && p[n] !== '') return p[n]
@@ -47,7 +48,8 @@ export function stringify(value) {
 }
 
 function base(f, who, type, extra = {}) {
-  return { who, type, ts: f.ts, ws: f.ws, wsName: f.wsName, sid: f.sid, turn: f.turn, ...extra }
+  return { who, type, ts: f.ts, ws: f.ws, wsName: f.wsName, sid: f.sid, turn: f.turn,
+    ...(typeof f.cwd === 'string' && isAbsolute(f.cwd) ? { workspace: f.cwd } : {}), ...extra }
 }
 
 // ——— 用户原话 ———

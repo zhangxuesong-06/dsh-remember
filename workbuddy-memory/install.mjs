@@ -15,6 +15,8 @@ fs.mkdirSync(binDir, { recursive: true })
 for (const [from, to] of [
   [path.join(here, '../dsh-memory/lib/evidence-files.mjs'), path.join(binDir, 'evidence-files.mjs')],
   [path.join(here, '../dsh-memory/lib/mem-recall.mjs'), path.join(binDir, 'mem-recall.mjs')],
+  ...['memory-cards.mjs', 'memory-case-index.mjs', 'tokenize.mjs'].map(name =>
+    [path.join(here, '../dsh-memory/lib', name), path.join(binDir, name)]),
   [path.join(here, 'bin', 'mem-evidence.mjs'), path.join(binDir, 'mem-evidence.mjs')],
   [path.join(here, 'bin', 'mem-maintenance.mjs'), path.join(binDir, 'mem-maintenance.mjs')],
   [path.join(here, 'bin', 'mem-index.mjs'), path.join(binDir, 'mem-index.mjs')],

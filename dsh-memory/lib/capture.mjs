@@ -210,7 +210,7 @@ export function eventToRecords(event, ctx) {
       const body = images ? `${text ? text + ' ' : ''}[图×${images}]` : text
       if (!body) return []
       out.push({
-        who: 'he', ts, text: fullText(body), turn: null, type: event.type,
+        who: 'he', ts, text: fullText(body), turn: data.turn ?? null, type: event.type,
         messageID: (data.message && data.message.id) || data.messageID || null,
         eventKey: baseKey, source: sourceOf('user/message'),
       })

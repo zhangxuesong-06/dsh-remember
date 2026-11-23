@@ -18,6 +18,8 @@
     "lib/evidence.mjs",
     "lib/journal.mjs",
     "lib/mem-recall.mjs",
+    "lib/memory-cards.mjs",
+    "lib/memory-case-index.mjs",
     "lib/pending.mjs",
     "lib/retrieve.mjs",
     "lib/sessions.mjs",

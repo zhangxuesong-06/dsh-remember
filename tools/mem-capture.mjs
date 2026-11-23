@@ -2,10 +2,24 @@
 import { sha256 } from './mem-journal.mjs'
 import { artifactPaths, snapshot, putBlob } from './mem-artifacts.mjs'
 import { excerpt } from './mem-context.mjs'
+import { tapPath, testObservation } from './memory-case-hint.mjs'
+import path from 'node:path'
+import fs from 'node:fs'
 
 const keyOf = (...parts) => sha256(JSON.stringify(parts))
 const fileOperation = (tool) => /(?:^|[._])(read|write|edit|patch|glob|grep|list|ls|rg|multiedit|multi_edit|apply_patch)$/.test(String(tool))
-export function createCapture(core, ws) {
+function testLocation(tool, input, ws) {
+  const test = tapPath(tool, input)
+  if (!test || typeof input?.workdir !== 'string' || !path.isAbsolute(input.workdir)) return null
+  try {
+    const directory = fs.realpathSync.native(input.workdir)
+    if (directory !== fs.realpathSync.native(ws)) return null
+    const file = fs.realpathSync.native(path.join(directory, test))
+    return file === path.join(directory, test) ? file : null
+  } catch { return null }
+}
+
+export function createCapture(core, ws, { caseTests = false } = {}) {
   const { append, appendTool, readAll, readTools, ROOT, journal } = core
   const all = readAll()
   const known = new Map(all.filter((r) => r.eventKey).slice(-5000).map((r) => [r.eventKey, r]))
@@ -105,8 +119,11 @@ export function createCapture(core, ws) {
     if (prior) return prior
     const input = e.input ?? {}
     const files = artifactPaths(e.tool, input, ws).map((p) => snapshot(ROOT, p))
+    const testPath = caseTests && testLocation(e.tool, input, ws)
+    if (testPath) files.push(snapshot(ROOT, testPath, 256 * 1024))
     return rememberTool({ sid, ws, callID, messageID: e.messageID, turnID: latestTurn(sid),
       tool: e.tool, phase: 'call', eventKey, fileOp: !!files.length || fileOperation(e.tool),
+      ...(testPath ? { testPath, testCommand: input.command } : {}),
       input: putBlob(ROOT, JSON.stringify(input)), files })
   }
   function project(row) {
@@ -132,11 +149,17 @@ export function createCapture(core, ws) {
     const call = toolByCall.get(`${sid}|${callID}`) || null
     const paths = call?.files?.map((f) => f.path) || artifactPaths(e.tool, e.input, ws)
     const files = paths.map((p) => ({ path: p, before: call?.files?.find((f) => f.path === p) || { state: 'unknown' }, after: snapshot(ROOT, p) }))
+    const testFile = caseTests && call?.testPath && call.tool === e.tool && call.testCommand === e.input?.command
+      && testLocation(e.tool, e.input, ws) === call.testPath
+      && files.find(file => file.path === call.testPath)
+    const caseTest = testFile && e.status === 'completed'
+      ? testObservation(e.input, e.result, testFile.before?.sha256, testFile.after?.sha256) : null
     const error = e.error ? { name: e.error.name, message: e.error.message || String(e.error), ...e.error } : undefined
     const row = rememberTool({ sid, ws, callID, messageID: e.messageID, turnID: call?.turnID || latestTurn(sid),
       tool: e.tool, phase: e.status === 'completed' ? 'completed' : 'error', eventKey, fileOp: !!files.length || fileOperation(e.tool),
       callEventID: call?.id, paired: !!call, files, durationMs: call ? Math.max(0, Date.now() - call.ts) : null,
       error: error ? String(error.message || error).slice(0, 300) : undefined,
+      ...(caseTest ? { caseTest } : {}),
       output: putBlob(ROOT, JSON.stringify(e.status === 'completed' ? e.result ?? null : error ?? null)) })
     project(row)
     return row

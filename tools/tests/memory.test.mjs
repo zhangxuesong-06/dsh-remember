@@ -9,6 +9,7 @@ import { createCapture } from '../mem-capture.mjs'
 import { snapshot, readBlob, artifactPaths } from '../mem-artifacts.mjs'
 import { injectBackground } from '../mem-context.mjs'
 import { setupMemory } from '../mem-plugin.mjs'
+import { caseSource, runCaseSync } from '../memory-case-index.mjs'
 
 const base = process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA, 'Temp/opencode') : os.tmpdir()
 fs.mkdirSync(base, { recursive: true })
@@ -292,6 +293,18 @@ test('插件在文本结束时保存最后回答；续调每次注入，持久�
   await hooks.context(codeMode)
   assert.match(codeMode.messages[0].content, /mem_read/)
   assert.doesNotMatch(codeMode.messages[0].content, /当前模型无记忆工具/)
+  for (const id of ['compact-a', 'compact-b']) {
+    await hooks.compaction({ sessionID: 's', id })
+    await hooks.compaction({ sessionID: 's', id })
+    const resumed = { sessionID: 's', messages: [{ role: 'user', content: '保存最后回答' }], tools: {} }
+    await hooks.context(resumed)
+    assert.match(resumed.messages[0].content, /memory anchor/)
+    assert.doesNotMatch(resumed.messages[0].content, /本轮已给/)
+    await hooks.compaction({ sessionID: 's', id })
+    const continued = { sessionID: 's', messages: [{ role: 'user', content: '保存最后回答' }] }
+    await hooks.context(continued)
+    assert.match(continued.messages[0].content, /本轮已给/)
+  }
   assert.ok(core.readAll().every((r) => !r.text.includes('memory-background')))
   const read = tools.find((t) => t.name === 'read')
   const row = core.readAll().find((r) => r.who === 'assistant')
@@ -311,6 +324,79 @@ test('工具长输出完整保留；缺少 before 时明确标记未配对', () 
   assert.equal(result.paired, false)
   assert.equal(JSON.parse(core.evidence(result.output.sha256)).content, output)
   assert.equal(core.verify().status, 'OK')
+})
+
+test('模糊需求在读到回归锚点后、第一次修改前收到可回读的旧案例', async (t) => {
+  process.env.MEMORY_CASE_RECALL = 'auto'
+  t.after(() => delete process.env.MEMORY_CASE_RECALL)
+  const file = 'export.test.mjs'
+  const name = 'retries share export_id'
+  fs.writeFileSync(path.join(root, file), `import test from 'node:test'\nimport assert from 'node:assert/strict'\nimport count from './count.mjs'\ntest('${name}', () => assert.equal(count, 1))\n`)
+  const capture = createCapture(core, root, { caseTests: true })
+  capture.user('old', 'old-user', '导出断了再点别多一份', 1)
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  for (const count of [2, 1]) {
+    fs.writeFileSync(path.join(root, 'count.mjs'), `export default ${count}`)
+    const event = { sessionID: 'old', id: 'test-' + count, tool: 'shell', input: { command: `node --test --test-reporter=tap ${file}`, workdir: root } }
+    capture.before(event)
+    const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', file], { cwd: root, env, encoding: 'utf8' })
+    const row = capture.after({ ...event, status: 'completed', result: { content: result.stdout, exitCode: result.status } })
+    assert.equal(row.caseTest?.passed, count === 1, JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr, file: row.files[0] }))
+  }
+  assert.equal(runCaseSync(caseSource('opencode', root, root)).state, 'ready')
+  const hooks = {}, tools = []
+  const canonical = [{ id: 'new-user', type: 'user', text: '导出断了再点别多一份', time: { created: Date.now() } }]
+  const hook = async (name, fn) => { hooks[name] = fn }
+  const cleanup = await setupMemory({ location: { directory: root }, session: { hook, context: async () => canonical },
+    tool: { hook, transform: async (fn) => fn({ namespace() {}, add: tool => tools.push(tool) }) } }, core)
+  t.after(cleanup)
+  await hooks.prompt({ sessionID: 'new', messageID: 'new-user', prompt: { text: canonical[0].text } })
+  const next = async () => {
+    const event = { sessionID: 'new', messages: [{ role: 'user', content: canonical[0].text }], tools: {} }
+    await hooks.context(event)
+    return event.messages[0].content
+  }
+  assert.doesNotMatch(await next(), /memory-case/)
+  await hooks['execute.after']({ sessionID: 'new', id: 'grep', tool: 'grep', status: 'completed',
+    result: { content: `${file}:4:test('${name}', () => assert.equal(count, 1))` } })
+  const shown = await next()
+  assert.match(shown, /历史回归已通过：retries share export_id/)
+  const ref = shown.match(/case:[\w:-]+/)[0]
+  assert.match(JSON.parse((await tools.find(tool => tool.name === 'read').execute({ ref })).content).text, /# pass 1/)
+  assert.doesNotMatch(await next(), /memory-case/)
+  await hooks.compaction({ sessionID: 'new', id: 'compact-new' })
+  assert.match(await next(), /历史回归已通过/)
+  for (const order of [['write', 'grep'], ['grep', 'write']]) {
+    assert.equal(runCaseSync(caseSource('opencode', root, root)).state, 'ready')
+    const sid = order.join('-')
+    const messageID = sid + '-user'
+    canonical[0] = { ...canonical[0], id: messageID }
+    await hooks.prompt({ sessionID: sid, messageID, prompt: { text: canonical[0].text } })
+    for (const tool of order) {
+      const event = { sessionID: sid, id: tool, tool, input: {}, status: 'completed',
+        result: { content: `${file}:4:test('${name}', () => assert.equal(count, 1))` } }
+      await hooks['execute.before'](event)
+      await hooks['execute.after'](event)
+    }
+    const outgoing = { sessionID: sid, messages: [{ role: 'user', content: canonical[0].text }] }
+    await hooks.context(outgoing)
+    assert.doesNotMatch(outgoing.messages[0].content, /memory-case/)
+  }
+  assert.equal(runCaseSync(caseSource('opencode', root, root)).state, 'ready')
+  canonical[0] = { ...canonical[0], id: 'changed-test', text: `核对 \`${file}\` 的 \`${name}\`` }
+  await hooks.prompt({ sessionID: 'new', messageID: 'changed-test', prompt: { text: canonical[0].text } })
+  fs.appendFileSync(path.join(root, file), '// 同名测试，条件已修改\n')
+  assert.doesNotMatch(await next(), /memory-case/)
+  const other = fs.mkdtempSync(path.join(root, 'other-'))
+  fs.copyFileSync(path.join(root, file), path.join(other, file))
+  const misplaced = { sessionID: 'old', id: 'wrong-directory', tool: 'shell',
+    input: { command: `node --test --test-reporter=tap ${file}`, workdir: root } }
+  capture.before(misplaced)
+  const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', file], { cwd: root, env, encoding: 'utf8' })
+  assert.equal(capture.after({ ...misplaced, input: { ...misplaced.input, workdir: other },
+    status: 'completed', result: { content: result.stdout, exitCode: result.status } }).caseTest, undefined)
+  assert.ok(core.readAll().every(row => !row.text.includes('memory-case')))
 })
 
 test('拒绝解锁活进程；非法可变状态不会被空对象覆盖', () => {

@@ -6,8 +6,14 @@ import { Ledger } from '../lib/store.mjs'
 import { recallBlock, ledgerQuotes, traceBlock } from '../lib/assemble.mjs'
 import { recallFlags, serializeRange } from '../lib/mem-recall.mjs'
 import { readBlob } from '../lib/evidence.mjs'
+import { caseSource, caseCommand } from '../lib/memory-case-index.mjs'
 
 const [cmd, ...rest] = process.argv.slice(2)
+const caseOutput = caseCommand(caseSource('zcode', HOME, process.env.ZCODE_PROJECT_DIR || process.cwd()), cmd, rest)
+if (caseOutput !== null) {
+  console.log(caseOutput)
+  process.exit(process.exitCode || 0)
+}
 const ledger = () => new Ledger(HOME).open()
 const maintenance = (args) => {
   const script = fileURLToPath(new URL('../tools/maintenance.mjs', import.meta.url))
