@@ -1,0 +1,11 @@
+[
+  {"id":"ref-message-1","kind":"message","who":"assistant","sid":"ref-session-a","text":"合成重复消息。"},
+  "{坏行",
+  "",
+  {"id":"ref-message-2","kind":"message","who":"assistant","sid":"ref-session-b","text":"合成重复消息。"},
+  {"id":"ref-after-bad","kind":"message","who":"user","sid":"ref-session-c","text":"合成坏行后的独立记录（opencode:5）。"},
+  {"id":"ref-file-v1","kind":"artifact","path":"fixture/export.json","text":"合成导出文件第一版。"},
+  {"id":"ref-file-v2","kind":"artifact","path":"fixture/export.json","text":"合成导出文件第二版。"},
+  {"id":"ref-episode-v1","kind":"episode","sid":"ref-session-d","turnID":"ref-turn","text":"合成轮次的首次摘要。"},
+  {"id":"ref-episode-v2","kind":"episode","sid":"ref-session-d","turnID":"ref-turn","text":"合成轮次的补充摘要。"}
+]
