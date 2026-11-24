@@ -129,7 +129,9 @@ function snapshotOnce() {
     }
     const manifest = {
       createdAt: new Date().toISOString(), root, name: stamp,
+      caseRoot: fs.realpathSync.native(root),
       files: SMALL.filter((n) => fs.existsSync(path.join(target, n))),
+      blobHashes: fs.readdirSync(toBlobs).filter(name => /^[a-f0-9]{64}$/.test(name)),
       blobs: { linked, copied, total: linked + copied },
       verify: { status: v.status, blobs: bv.checked },
     }

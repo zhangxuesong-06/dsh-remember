@@ -102,7 +102,10 @@ function snapshotDir(dir) {
     }
     const v = verifyDir(target)
     if (v.status === 'BAD' || v.status === 'OPEN_FAILED') throw new Error('snapshot verify failed: ' + JSON.stringify(v.problems))
-    const manifest = { createdAt: new Date().toISOString(), dir, name: stamp, blobs: { linked, copied }, verify: v }
+    const manifest = { createdAt: new Date().toISOString(), dir, name: stamp,
+      caseRoot: fs.realpathSync.native(dir), files: SMALL.filter(name => fs.existsSync(path.join(target, name))),
+      blobHashes: fs.readdirSync(toBlobs).filter(name => /^[a-f0-9]{64}$/.test(name)),
+      blobs: { linked, copied }, verify: v }
     atomicWrite(path.join(target, 'manifest.json'), manifest)
     return manifest
   } catch (error) {

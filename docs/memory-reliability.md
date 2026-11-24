@@ -44,6 +44,60 @@ OpenCode 接口依据 [V2 服务插件文档](https://opencode.ai/v2/docs/build/
 
 启动时会重放已落盘的派生事件；`node tools/mem.mjs replay` 可手动补齐。它不能重建从未记录的原始工具结果。连接中断期间未保存的助手原文，只有仍在规范会话上下文中才可自动补记。
 
+### OpenCode 和 DSH 的隔离恢复
+
+在仓库根目录运行完整合成演练。需要支持 SQLite FTS5 的 Node.js，本轮在 Windows 的 Node v24.19.0 验证。
+
+```powershell
+node --test agent-memory/restore-memory.test.mjs
+```
+
+演练会用两端现有 `--backup` 创建快照，复制到独立目录，再移开合成源库。每端从同一份快照恢复两次，还验证了旧版清单。随后比对完整正文、角色、物理行、原编号、记录 ID 和原 `case:` 引用。三个被引用的 blob 逐字节比对，各端还核验一个未被引用的 blob。第一次重放补一条缺失的产物记录，第二次重放账本字节不变。案例索引从账本重建。DSH 也检查 `state.json` 重建和 `seqs.json` 保留。临时文件在演练结束后清理。
+
+已有一份可信的合成备份时，在单独的 PowerShell 窗口执行下面命令。`$snapshot` 指向含 `manifest.json` 的 `--backup` 产物，`$workspace` 填该夹具的原工作区。OpenCode 的旧案例引用仍要求原工作区路径可以解析。DSH 用原工作区名称和路径计算账本名，多身份线同时设置当时的 `HIPPO_LINE`。
+
+```powershell
+$repo = (Get-Location).Path
+$adapter = 'opencode'             # DSH 改为 'dsh'
+$snapshot = 'C:\scratch\synthetic-snapshot'
+$workspace = 'C:\scratch\original-synthetic-project'
+$output = Join-Path ([IO.Path]::GetTempPath()) 'memory-recovery'
+New-Item -ItemType Directory -Force -Path $output | Out-Null
+$json = node "$repo\agent-memory\restore-memory.mjs" --adapter $adapter --snapshot $snapshot --output $output
+if ($LASTEXITCODE -ne 0) { throw '快照恢复失败' }
+$restored = $json | ConvertFrom-Json
+$restored.verification
+
+$env:AGENT_MEMORY_HOME = $restored.root
+$env:OPENCODE_MEM_HOME = Join-Path $restored.root 'opencode'
+$env:DSH_HOME = Join-Path $restored.root 'dsh-host'
+$env:DSH_MEMORY_HOME = Join-Path $restored.root 'dsh'
+$env:CODEX_MEMORY_HOME = Join-Path $restored.root 'codex'
+$env:HIPPO_LINE = ''              # DSH 身份线夹具可填当时的线名
+$env:MEMORY_DISABLE_MAINTENANCE = '1'
+$env:MEMORY_CASE_RECALL = 'manual'
+$env:MEMORY_CASE_RESTORE = '1'
+
+if ($adapter -eq 'opencode') {
+    node "$repo\tools\mem.mjs" replay
+    if ($LASTEXITCODE -ne 0) { throw '重放失败' }
+    node "$repo\tools\mem.mjs" verify
+    if ($LASTEXITCODE -ne 0) { throw '恢复库校验失败' }
+    node "$repo\tools\mem-maintenance.mjs" --root $restored.ledger --case-index-rebuild
+} else {
+    node "$repo\dsh-memory\cli.mjs" replay $workspace
+    if ($LASTEXITCODE -ne 0) { throw '重放失败' }
+    node "$repo\dsh-memory\cli.mjs" verify $workspace
+    if ($LASTEXITCODE -ne 0) { throw '恢复库校验失败' }
+    node "$repo\dsh-memory\cli.mjs" case-index-rebuild $workspace
+}
+if ($LASTEXITCODE -ne 0) { throw '案例索引重建失败' }
+```
+
+启用 `MEMORY_CASE_RESTORE=1` 后，旧 `case:` 引用只在该快照已校验的字节范围内沿用原账本身份。恢复后追加的记录归各自副本。OpenCode 从原工作区执行 `node "$repo\tools\mem.mjs" show $ref`，DSH 使用 `node "$repo\dsh-memory\cli.mjs" show $workspace $ref`。原物理行引用还可用 `node "$repo\agent-memory\recall.mjs" show $ref --json` 回读。旧版清单使用其绝对 `root` 或 `dir`。如果制备备份时使用过目录别名，旧清单缺少规范路径，旧 `case:` 引用可能需要重新生成。从恢复库再次备份时，以该恢复库作为新一代备份的来源。跨多代的引用传承未覆盖。
+
+脚本每次在指定父目录新建恢复库，按字节复制文件和 blob。它在原始日志与完整性检查点通过校验后才返回恢复路径。缺证据返回 `MISSING_BLOB`，证据字节不符返回 `CORRUPT_BLOB`，日志、检查点或 DSH 段索引结构损坏返回 `CORRUPT_SNAPSHOT`，仍有未接纳记录返回 `UNVERIFIED_SNAPSHOT`。这些失败退出码为 `1`，本次创建的副本会清理。新清单会列出备份中的 blob 哈希。可变状态文件沿用备份格式，清单对这些文件没有独立的内容哈希。校验沿用整流扫描，超出 Node 字符串上限的日志会拒绝恢复，超大账本仍待专项验收。测试范围是 OpenCode 和 DSH 源码 CLI 的合成备份，WorkBuddy、ZCode、Codex 的独立恢复待验。
+
 桌面服务实测存在模块缓存：仅改变 import 的 URL 参数不能可靠刷新依赖。插件为整套 `mem-*.mjs` 生成内容版本目录后加载，确保依赖来自同一版本；旧目录保留供已发出的请求使用。修改工具源码后要让插件入口重新加载。无需为了这个改动重启服务。
 
 ## 验证

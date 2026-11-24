@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url)
 const debug = debuglog('memory-cases')
 const BATCH = 1024 * 1024
 const VERSION = 2
+export const RESTORE_ORIGIN_FILE = 'restore-origin.json'
 const unavailable = () => ({ state: 'unavailable', cards: [] })
 const stale = () => ({ state: 'stale', cards: [] })
 const real = value => fs.realpathSync.native(value)
@@ -25,22 +26,50 @@ export function caseProject(cwd) {
 }
 
 export function caseSource(adapter, root, cwd, { singleProject = false, checkpointed = false } = {}) {
+  const origin = restoreOrigin(adapter, root)
   let project
   try {
-    if (singleProject) project = real(root)
+    if (singleProject) project = origin?.originalRoot || real(root)
     else if (cwd && path.isAbsolute(cwd)) project = caseProject(cwd)
   } catch {}
   const streams = adapter === 'opencode' ? ['stream', 'tools'] : ['stream']
-  return { adapter, root, project, singleProject, streams, checkpointed }
+  return { adapter, root, project, singleProject, streams, checkpointed, origin }
+}
+
+function restoreOrigin(adapter, root) {
+  if (process.env.MEMORY_CASE_RESTORE !== '1' || !['opencode', 'dsh'].includes(adapter)) return null
+  try {
+    const file = path.join(root, RESTORE_ORIGIN_FILE)
+    if (!fs.lstatSync(file).isFile()) return null
+    const origin = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const valid = stream => Number.isSafeInteger(origin.streamBytes?.[stream]) && origin.streamBytes[stream] >= 0
+    if (origin?.adapter === adapter && typeof origin.originalRoot === 'string' && path.isAbsolute(origin.originalRoot)
+      && valid('stream') && (adapter !== 'opencode' || valid('tools'))) return origin
+  } catch {}
+  return null
 }
 
 function sourceRoot(source) {
   return real(source.root)
 }
 
+function scopeAt(source, project, stream, end, root) {
+  const origin = source.origin
+  if (origin && end <= origin.streamBytes[stream]) {
+    return referenceScope(digest(key(source.adapter, origin.originalRoot)), project)
+  }
+  const localRoot = root || source.localRoot || sourceRoot(source)
+  return referenceScope(source.ledger || digest(key(source.adapter, localRoot)), source.singleProject ? localRoot : project)
+}
+
+function restoredEnd(source, stream, offset) {
+  return source.adapter === 'opencode' && source.origin?.streamBytes[stream] === offset
+}
+
 function open(source, readOnly) {
   const root = sourceRoot(source)
-  const file = path.join(root, `memory-cases-${source.adapter}-v${VERSION}.sqlite`)
+  const name = source.origin ? `r${VERSION}-${digest(key(source.origin)).slice(0, 12)}.sqlite` : `memory-cases-${source.adapter}-v${VERSION}.sqlite`
+  const file = path.join(root, name)
   if (fs.existsSync(file) && real(file) !== file) throw new Error('Index path redirected')
   const db = process.versions.bun
     ? new (require('bun:sqlite').Database)(file, { readonly: readOnly })
@@ -92,8 +121,7 @@ function mapRow(source, row, stream, offset, hash, bytes) {
   const turn = row.turnID ?? row.turn
   const type = row.kind || row.type
   const id = String(row.id || row.eventKey || row.seq || `${offset}:${hash}`)
-  const ledger = source.ledger || digest(key(source.adapter, sourceRoot(source)))
-  const ref = { scope: referenceScope(ledger, project), stream, id,
+  const ref = { scope: scopeAt(source, project, stream, offset + bytes), stream, id,
     field: 'text', coverage: row.coverage === 'sample' || row.completion === 'preview' ? 'sample' : 'full', hash, offset, bytes }
   const event = { project, sid, turn: turn == null ? null : String(turn), id, ref, ts: Number(row.ts) || 0 }
   if (stream === 'tools' || type === 'tool/call' || type === 'tool/result') {
@@ -232,7 +260,11 @@ function syncStream(source, prepare, stream, budget) {
     if (prior && prefix.copy().digest('hex') !== prior.prefix) throw new Error('Stale source')
     const bytes = read(fd, offset, Math.min(stat.size - offset, budget))
     let start = 0
-    for (let end = bytes.indexOf(10); end >= 0; end = bytes.indexOf(10, start)) {
+    const allowEnd = offset + bytes.length === stat.size && restoredEnd(source, stream, stat.size)
+    while (start < bytes.length) {
+      const newline = bytes.indexOf(10, start)
+      if (newline === -1 && !allowEnd) break
+      const end = newline === -1 ? bytes.length : newline
       const rowBytes = bytes.subarray(start, end)
       if (!skipping && rowBytes.toString('utf8').trim()) {
         let row
@@ -240,7 +272,7 @@ function syncStream(source, prepare, stream, budget) {
         if (row && typeof row === 'object') applyRow(prepare, mapRow(source, row, stream, offset + start, digest(rowBytes), rowBytes.length))
       }
       skipping = 0
-      start = end + 1
+      start = newline === -1 ? end : end + 1
     }
     if (start === 0 && (skipping || bytes.length === BATCH)) {
       if (!skipping) gaps++
@@ -262,7 +294,8 @@ function syncStream(source, prepare, stream, budget) {
 export function syncCaseIndex(source, { rebuild = false } = {}) {
   let db
   try {
-    source = { ...source, projects: new Map(), ledger: digest(key(source.adapter, sourceRoot(source))) }
+    const localRoot = sourceRoot(source)
+    source = { ...source, localRoot, projects: new Map(), ledger: digest(key(source.adapter, localRoot)) }
     db = open(source, false)
     db.exec('BEGIN IMMEDIATE')
     initialize(db)
@@ -285,7 +318,7 @@ export function syncCaseIndex(source, { rebuild = false } = {}) {
         progress += result.progress || 0
         if (!rebuild) budget -= result.used
         else if (result.pending && !result.progress) throw new Error('Incomplete source during rebuild')
-      } while (rebuild && result.pending)
+      } while (rebuild && result.pending && result.progress)
       pending ||= result.pending
       gaps += result.gaps || 0
     }
@@ -373,13 +406,15 @@ export function readEvidence(source, ref, range) {
   let fd
   try {
     const root = sourceRoot(source)
-    if (ref.scope !== referenceScope(digest(key(source.adapter, root)), source.project)) return { state: 'denied' }
-    fd = fs.openSync(streamFile(source, ref.stream), 'r')
-    if (ref.offset && read(fd, ref.offset - 1, 1)[0] !== 10) return { state: 'corrupt' }
     const size = ref.bytes
     if (!Number.isSafeInteger(size) || size < 1 || size >= BATCH) return { state: 'missing' }
+    const end = ref.offset + size
+    if (ref.scope !== scopeAt(source, source.project, ref.stream, end, root)) return { state: 'denied' }
+    fd = fs.openSync(streamFile(source, ref.stream), 'r')
+    if (ref.offset && read(fd, ref.offset - 1, 1)[0] !== 10) return { state: 'corrupt' }
     const bytes = read(fd, ref.offset, size + 1)
-    if (bytes.length !== size + 1 || bytes[size] !== 10) return { state: 'missing' }
+    const atRestoredEnd = bytes.length === size && restoredEnd(source, ref.stream, end)
+    if (!atRestoredEnd && (bytes.length !== size + 1 || bytes[size] !== 10)) return { state: 'missing' }
     const line = bytes.subarray(0, size)
     const row = JSON.parse(line.toString('utf8').replace(/^\uFEFF/, ''))
     if (scopeOf(source, row) !== source.project) return { state: 'denied' }
