@@ -53,9 +53,11 @@ DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收�
 
 OpenCode 的 `auto` 是试验开关。插件只在当前项目根的任务开始或读到测试锚点后查找已验证案例。匹配要求测试路径、名称和当前测试文件版本一致。首次可能写入后跳过首次提示。同轮规范历史出现新的已完成压缩记录时，复核原证据后允许补发同一条。每次提示最多 512 UTF-8 字节，每轮合计最多 1,536 字节。
 
-用 `node agent-memory/probe-opencode-cases.mjs "<OpenCode CLI 的绝对路径>"` 检查隔离宿主的失败与通过证据、首次写入前的提示、先写后读保持静默和原文回读。加 `--compact` 检查连续两次压缩，每次完成后同一提示补发一次。探针只使用临时配置、账本、项目和本机模拟提供方。整题模型收益仍由下面的三组对照衡量。
+用 `node agent-memory/probe-opencode-cases.mjs "<OpenCode CLI 的绝对路径>"` 检查隔离宿主的失败与通过证据、首次写入前的提示、先写后读保持静默和原文回读。加 `--compact` 检查连续两次压缩，每次完成后同一提示补发一次。
 
-OpenCode 可用 `node tools/mem-maintenance.mjs --root "<账本目录>" --case-index-sync` 或 `--case-index-rebuild` 维护案例索引。其余四端在上述 CLI 使用 `case-index-sync` 或 `case-index-rebuild`，DSH 在命令后附工作区。关闭试验时设 `MEMORY_CASE_RECALL=off` 或清除这个变量。日常原文查询仍可访问源账本。
+`--full-task` 用脚本化提供方验证读取当前配置、修改合成文件和运行测试的整条路径。`--ollama "<本机已安装的模型>" --full-task` 在回环 Ollama 上以同一合成快照运行现有召回、手动短条目和自动提示三组。省略 `--full-task` 时，Ollama 模式运行只读诊断。每组记录实际模型请求、工具调用、提示是否到达、修改前是否核对当前配置、最终文件和独立测试结果。工具调用与测试结果取自宿主证据及本机复跑。三组都使用直接工具定义，所有探针使用临时配置、账本和项目。单题结果用于诊断，正式三组对照规则见下文。
+
+OpenCode 可用 `node tools/mem-maintenance.mjs --root "<账本目录>" --case-index-sync` 或 `--case-index-rebuild` 维护案例索引。其余四端在上述 CLI 使用 `case-index-sync` 或 `case-index-rebuild`，DSH 在命令后附工作区。升级 v3 后从源账本生成新版索引，首次回填期间可能返回 `unavailable` 或 `stale`。v2 派生文件留给旧版回退，原有 `case:` 引用可以继续回读。关闭试验时设 `MEMORY_CASE_RECALL=off` 或清除这个变量。日常原文查询仍可访问源账本。
 
 ### 三组模型对照
 

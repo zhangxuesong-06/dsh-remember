@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repo = fileURLToPath(new URL('../../', import.meta.url))
-const shared = ['assemble', 'evidence-files', 'mem-recall', 'memory-cards', 'memory-case-index', 'retrieve', 'signal', 'tokenize']
+const shared = ['assemble', 'evidence-files', 'mem-recall', 'memory-cards', 'memory-case-index', 'memory-text', 'retrieve', 'signal', 'tokenize']
   .map((name) => `lib/${name}.mjs`)
 
 // Build beside the installed package so a failed copy leaves the previous version usable.

@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { Ledger } from './lib/store.mjs'
 import { anchorBlock, anchorCutoff, primingBlock, emotionCueBlock, recallBlock, arrivalBlock, selfLines, sid8, lineOfDoc, recentMention } from './lib/assemble.mjs'
 import { search, priming } from './lib/retrieve.mjs'
-import { tokenize, topicKey, headline } from './lib/tokenize.mjs'
+import { topicKey, headline } from './lib/memory-text.mjs'
+import { tokenize } from './lib/tokenize.mjs'
 
 let pass = 0
 let fail = 0

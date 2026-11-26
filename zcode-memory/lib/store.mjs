@@ -14,7 +14,8 @@ import {
   openSync, readSync, closeSync, statSync, renameSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { termFreq, headline, tokenize } from './tokenize.mjs'
+import { termFreq, headline } from './memory-text.mjs'
+import { tokenize } from './tokenize.mjs'
 import { episodeSalience, isClosing, isTransition, domainOf } from './signal.mjs'
 import { createIntegrity, sha256, verifyBlobs, scan } from './evidence.mjs'
 

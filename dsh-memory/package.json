@@ -33,6 +33,7 @@
     "lib/store.mjs",
     "lib/subagent.mjs",
     "lib/tokenize.mjs",
+    "lib/memory-text.mjs",
     "tools/list-workspaces.mjs",
     "tools/maintenance.mjs",
     "tools/patch-profile.mjs",

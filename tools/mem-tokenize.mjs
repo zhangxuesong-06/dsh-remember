@@ -1,7 +1,4 @@
-// 中文 bigram + 英文词。纯函数，无副作用。
-//
-// 单独成文件是为了让跨库只读查询能复用同一套分词，又不必 import mem-core——
-// mem-core 初始化时会碰目录和锁，不属于“只读聚合”的范围。
+// 原文召回分词，由 OpenCode 和跨库只读查询共享。
 const CJK = /[\u4e00-\u9fff]+/g
 const LATIN = /[a-zA-Z][a-zA-Z0-9_.\-]*/g
 

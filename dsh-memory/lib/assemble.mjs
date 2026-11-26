@@ -7,7 +7,8 @@
 //   3. 给的是原文，不是摘要。摘要会磨平语气，语气就是身份。
 //   4. 拼装绝不抛异常。记忆坏了，最多是这一轮想不起来，不能连话都说不出。
 
-import { tokenize, headline } from './tokenize.mjs'
+import { headline } from './memory-text.mjs'
+import { tokenize } from './tokenize.mjs'
 import { priming, episodeText, traceHits, recencyOf, search } from './retrieve.mjs'
 import { compactLimit, compactQuotes, compactRecall } from './mem-recall.mjs'
 

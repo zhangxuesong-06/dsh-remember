@@ -43,7 +43,8 @@ import { isSubagent, filterSubagentRecords } from './lib/subagent.mjs'
 import { anchorBlock, anchorCutoff, primingBlock, emotionCueBlock, recallBlock, ledgerQuotes, traceBlock, factsBlock, arrivalBlock, dayOf, selfLines, strengthOf, sid8, lineOfDoc } from './lib/assemble.mjs'
 import { search } from './lib/retrieve.mjs'
 import { readBlob } from './lib/evidence.mjs'
-import { topicKey, tokenize } from './lib/tokenize.mjs'
+import { topicKey } from './lib/memory-text.mjs'
+import { tokenize } from './lib/tokenize.mjs'
 
 export const name = 'memory'
 export const inject = ['systemPrompt', 'agents', 'tools']

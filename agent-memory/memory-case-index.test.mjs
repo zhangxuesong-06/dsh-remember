@@ -4,9 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { spawnSync } from 'node:child_process'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { caseSource, caseWatermark, readCaseRef, readEvidence, searchCases, syncCaseIndex } from '../dsh-memory/lib/memory-case-index.mjs'
-import { caseRef } from '../dsh-memory/lib/memory-cards.mjs'
+import { caseRef, digest } from '../dsh-memory/lib/memory-cards.mjs'
 import { eventToRecords } from '../dsh-memory/lib/capture.mjs'
 import { Ledger } from '../dsh-memory/lib/store.mjs'
 
@@ -129,6 +130,50 @@ test('手动检索先按项目限定候选，BM25 排名和同分顺序可重复
   assert.equal(search('shared rare_anchor')[0].evidence[0].id, 'both')
   assert.equal(syncCaseIndex(source, { rebuild: true }).state, 'ready')
   assert.deepEqual(search('shared').map(card => card.evidence[0].id), ['first', 'second', 'both', 'long'])
+})
+
+test('按词数读取高频词，混合命中仍与完整 BM25 的结果一致', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'case-hot-rank-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const source = caseSource('codex', root, root)
+  const append = (id, text, ws = root) => fs.appendFileSync(path.join(root, 'stream.jsonl'),
+    JSON.stringify({ id, text, kind: 'decision', ws }) + '\n')
+  append('updated', 'shared oldword')
+  for (let i = 0; i < 120; i++) append(`card-${i}`, `shared dense ${'length '.repeat(i % 3)}${i}`)
+  for (let i = 0; i < 10; i++) append(`short-${i}`, 'shared dense')
+  append('long', 'shared unique with longer text')
+  append('rare-full', 'shared dense unique with longer text')
+  append('rare-alone', 'unique')
+  for (let i = 0; i < 8; i++) append(`sparse-${i}`, 'dense sparse rare')
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'case-other-rank-'))
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }))
+  for (let i = 0; i < 12; i++) append(`foreign-${i}`, 'shared dense sparse rare', other)
+  fs.writeFileSync(path.join(root, 'memory-cases-codex-v2.sqlite'), 'old index stays available to old code')
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  assert.equal(readCaseRef(source, caseRef(searchCases(source, { cue: 'oldword' }).cards[0].evidence[0])).text, 'shared oldword')
+  const oldRef = caseRef(searchCases(source, { cue: 'oldword' }).cards[0].evidence[0])
+  append('updated', 'shared replacement newer detail')
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  assert.deepEqual(searchCases(source, { cue: 'oldword' }).cards, [])
+  assert.equal(readCaseRef(source, oldRef).text, 'shared oldword')
+  assert.equal(fs.readFileSync(path.join(root, 'memory-cases-codex-v2.sqlite'), 'utf8'), 'old index stays available to old code')
+  const db = new DatabaseSync(path.join(root, 'memory-cases-codex-v3.sqlite'), { readOnly: true })
+  try {
+    const project = 'p' + digest(source.project).slice(0, 32)
+    const match = cue => `project:${project} AND terms:(${cue.split(' ').map(word => 'x' + Buffer.from(word).toString('hex')).join(' OR ')})`
+    const query = db.prepare('SELECT rowid, terms FROM card_fts WHERE card_fts MATCH ? ORDER BY rowid LIMIT 8')
+    assert.ok(query.all(match('shared')).every(row => row.terms.split(' ').length === 2))
+    const oracle = db.prepare(`SELECT card FROM card_fts JOIN cards ON cards.fts_id = card_fts.rowid
+      WHERE card_fts MATCH ? ORDER BY bm25(card_fts), cards.rowid LIMIT ?`)
+    for (const cue of ['shared', 'shared dense', 'shared unique', 'replacement', 'unmatched', 'shared unknown',
+      'shared sparse', 'shared dense sparse rare', 'dense sparse', 'shared dense replacement', 'shared dense unique',
+      'unique shared dense', 'shared sparse unique', 'shared unknown sparse', 'dense sparse rare', 'aax bbx ccx']) {
+      for (const limit of [1, 3, 8]) {
+        assert.deepEqual(searchCases(source, { cue, limit }).cards,
+          oracle.all(match(cue), limit).map(row => JSON.parse(row.card)), `${cue} (${limit})`)
+      }
+    }
+  } finally { db.close() }
 })
 
 test('长证据默认限量，下一范围不切断 emoji', t => {

@@ -11,7 +11,8 @@ import { digest, key, projectCard, mode, referenceScope, renderCards } from './m
 const require = createRequire(import.meta.url)
 const debug = debuglog('memory-cases')
 const BATCH = 1024 * 1024
-const VERSION = 2
+const VERSION = 3
+const CARD_ROWID_SPAN = 2 ** 40
 export const RESTORE_ORIGIN_FILE = 'restore-origin.json'
 const unavailable = () => ({ state: 'unavailable', cards: [] })
 const stale = () => ({ state: 'stale', cards: [] })
@@ -154,7 +155,6 @@ function mapRow(source, row, stream, offset, hash, bytes) {
 const terms = text => [...new Set(tokenize(String(text).slice(0, 2048)))].slice(0, 64)
 const encoded = word => 'x' + Buffer.from(word).toString('hex')
 const projectTerm = project => 'p' + digest(project).slice(0, 32)
-const indexText = card => terms(`${card.summary} ${card.anchors.join(' ')}`).map(encoded).join(' ')
 
 function saveCard(prepare, project, card) {
   if (!card) return
@@ -163,11 +163,15 @@ function saveCard(prepare, project, card) {
     card.status = 'superseded'
     card.keys = []
   }
-  const { rowid } = prepare(`INSERT INTO cards VALUES (?,?,?,?,?)
-    ON CONFLICT(id) DO UPDATE SET ts=excluded.ts, card=excluded.card, suppressed=excluded.suppressed RETURNING rowid`)
-    .get(card.id, project, card.changedAt, JSON.stringify(card), Number(!!suppressed))
-  prepare('DELETE FROM card_fts WHERE rowid=?').run(rowid)
-  prepare('INSERT INTO card_fts(rowid,project,terms) VALUES (?,?,?)').run(rowid, projectTerm(project), indexText(card))
+  const words = terms(`${card.summary} ${card.anchors.join(' ')}`)
+  const { rowid, fts_id } = prepare(`INSERT INTO cards(id,project,card) VALUES (?,?,?)
+    ON CONFLICT(id) DO UPDATE SET card=excluded.card RETURNING rowid,fts_id`)
+    .get(card.id, project, JSON.stringify(card))
+  if (rowid >= CARD_ROWID_SPAN) throw new Error('Case index rowid exceeds its range')
+  const ftsID = words.length * CARD_ROWID_SPAN + rowid
+  if (fts_id !== null) prepare('DELETE FROM card_fts WHERE rowid=?').run(fts_id)
+  prepare('INSERT INTO card_fts(rowid,project,terms) VALUES (?,?,?)').run(ftsID, projectTerm(project), words.map(encoded).join(' '))
+  prepare('UPDATE cards SET fts_id=? WHERE rowid=?').run(ftsID, rowid)
   prepare('DELETE FROM auto_keys WHERE project=? AND id=?').run(project, card.id)
   const auto = prepare('INSERT INTO auto_keys VALUES (?,?,?)')
   for (const value of card.keys) auto.run(project, value, card.id)
@@ -234,7 +238,7 @@ function initialize(db) {
     CREATE TABLE IF NOT EXISTS events (project TEXT, group_id TEXT, id TEXT, ts INTEGER, event TEXT,
       PRIMARY KEY(project,group_id,id));
     CREATE INDEX IF NOT EXISTS events_recent ON events(project,group_id,ts DESC,id DESC);
-    CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, project TEXT, ts INTEGER, card TEXT, suppressed INTEGER);
+    CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, project TEXT, card TEXT, fts_id INTEGER);
     CREATE TABLE IF NOT EXISTS corrections (project TEXT, id TEXT, PRIMARY KEY(project,id));
     CREATE TABLE IF NOT EXISTS auto_keys (project TEXT, key TEXT, id TEXT, PRIMARY KEY(project,key,id)) WITHOUT ROWID;
     CREATE VIRTUAL TABLE IF NOT EXISTS card_fts USING fts5(project, terms);
@@ -389,15 +393,56 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
       const get = db.prepare('SELECT card FROM cards WHERE project=? AND id=?')
       return { state: 'ready', cards: [...ids].map(id => JSON.parse(get.get(source.project, id).card)) }
     }
-    const query = terms(cue).slice(0, 16).map(encoded).join(' OR ')
-    if (!query) return { state: 'ready', cards: [] }
-    // Explicit BM25 lets SQLite use a bounded top-N sort instead of FTS5's full rank sort.
-    const rows = db.prepare(`SELECT cards.card FROM (
-      SELECT rowid, bm25(card_fts) AS score FROM card_fts WHERE card_fts MATCH ?
-      ORDER BY score, rowid LIMIT ?
-    ) AS hits JOIN cards ON cards.rowid=hits.rowid AND cards.project=?
-    ORDER BY hits.score, hits.rowid`)
-      .all(`project : ${projectTerm(source.project)} AND terms : (${query})`, count, source.project)
+    const words = terms(cue).slice(0, 16).map(encoded)
+    if (!words.length) return { state: 'ready', cards: [] }
+    const match = expression => `project:${projectTerm(source.project)} AND terms:(${expression})`
+    const byLength = 'FROM card_fts WHERE card_fts MATCH ? ORDER BY rowid LIMIT ?'
+    const score = 'SELECT rowid, bm25(card_fts) AS score FROM card_fts WHERE card_fts MATCH ?'
+    const rank = `score, rowid % ${CARD_ROWID_SPAN}`
+    let hits = `SELECT rowid, rowid AS score ${byLength}`
+    const any = match(words.join(' OR '))
+    let args = [any, count]
+    if (words.length > 1) {
+      const full = match(words.join(' AND '))
+      // Keep the boundary and the scored rows in one SQLite snapshot.
+      db.exec('BEGIN')
+      const nth = db.prepare(`SELECT rowid ${byLength} OFFSET ?`)
+      const cutoff = nth.get(full, 1, count - 1)
+      if (words.length <= 3 && !cutoff) {
+        let matches
+        if (words.length === 2) {
+          const [a, b] = words
+          matches = [full, match(`${a} NOT ${b}`), match(`${b} NOT ${a}`)]
+        } else {
+          // A top-N card is among the N shortest hits for all of its matching
+          // terms. Cards shorter than it with those terms already outrank it.
+          const groups = new Set()
+          const shortest = db.prepare(`SELECT terms ${byLength}`)
+          for (let mask = 1; mask < 8; mask++) {
+            const subset = words.filter((_, index) => mask & (1 << index))
+            for (const { terms: text } of shortest.all(match(subset.join(' AND ')), count)) {
+              const present = text.split(' ')
+              groups.add(match(words.filter(word => present.includes(word)).join(' AND ')))
+            }
+          }
+          if (!groups.size) return { state: 'ready', cards: [] }
+          matches = [...groups]
+        }
+        // BM25 for a subset only weakens a card's score. Keep its best score
+        // if it appears in more than one group.
+        const group = `SELECT * FROM (${score} ORDER BY rowid LIMIT ?)`
+        hits = `SELECT rowid, min(score) AS score FROM (${matches.map(() => group).join(' UNION ALL ')})
+          GROUP BY rowid ORDER BY ${rank} LIMIT ?`
+        args = [...matches.flatMap(expression => [expression, count]), count]
+      } else if (!cutoff || nth.get(any, 1, count - 1).rowid !== cutoff.rowid) {
+        // The Nth full match caps the candidates. Matching boundaries need no scoring.
+        hits = `${score}${cutoff ? ' AND rowid<=?' : ''} ORDER BY ${rank} LIMIT ?`
+        args = [any, ...(cutoff ? [cutoff.rowid] : []), count]
+      }
+    }
+    const rows = db.prepare(`SELECT cards.card FROM (${hits}) AS hits
+      JOIN cards ON cards.rowid=hits.rowid % ${CARD_ROWID_SPAN} AND cards.project=?
+      ORDER BY hits.score, hits.rowid % ${CARD_ROWID_SPAN}`).all(...args, source.project)
     return { state: 'ready', cards: rows.map(row => JSON.parse(row.card)) }
   } catch { return unavailable() }
   finally { db?.close() }

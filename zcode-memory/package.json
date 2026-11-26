@@ -26,6 +26,7 @@
     "lib/signal.mjs",
     "lib/store.mjs",
     "lib/tokenize.mjs",
+    "lib/memory-text.mjs",
     "tools/backfill.mjs",
     "tools/maintenance.mjs",
     "hooks/hooks.json",
