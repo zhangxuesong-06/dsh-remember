@@ -82,6 +82,7 @@ export async function setupMemory(ctx, core) {
     const user = [...rows].reverse().find((r) => r.type === 'user')
     if (user) s.cue = user.text
     else if (!s.cue) s.cue = core.readAll().filter((r) => r.sid === sid && r.who === 'user').at(-1)?.text || ''
+    return rows
   }
   await hook(ctx.session, 'prompt', (e) => {
     const text = String(e.prompt?.text || '').trim()
@@ -106,9 +107,16 @@ export async function setupMemory(ctx, core) {
   await hook(ctx.session, 'context', async (e) => {
     const sid = e.sessionID, s = state(sid)
     // Read visible canonical text before editing the outgoing copy, including interrupted replies.
-    await persisted(sid)
+    const rows = await persisted(sid)
     if (auto && s.caseTurn) {
       const turn = s.caseTurn
+      // The compaction hook can run before a checkpoint is used. Only committed
+      // checkpoints from the canonical session can justify sending the case again.
+      const checkpoint = rows.findLast(row => row.type === 'compaction' && row.status === 'completed' && row.id)?.id
+      if (checkpoint && checkpoint !== turn.checkpoint) {
+        if (turn.delivered) turn.compactPending = true
+        turn.checkpoint = checkpoint
+      }
       const pick = keys => {
         if (!keys.length) return null
         const { cards } = searchCases(source, { keys, watermark: turn.watermark, current: { sid, turn: s.promptID } })
@@ -189,7 +197,6 @@ export async function setupMemory(ctx, core) {
     if (e.cancelled === true) {
       if (s.pendingCompactionID === id) {
         s.compactPending = false
-        if (s.caseTurn) s.caseTurn.compactPending = false
       }
       return
     }
@@ -199,7 +206,6 @@ export async function setupMemory(ctx, core) {
       if (s.compactIds.size > 32) s.compactIds.delete(s.compactIds.values().next().value)
     }
     s.compactPending = true
-    if (s.caseTurn?.delivered) s.caseTurn.compactPending = true
     s.pendingCompactionID = id
     core.append({ who: 'system', kind: 'compaction', text: '发起上下文压缩请求（完成状态待事件确认）', ws, sid: e.sessionID })
   })
@@ -213,7 +219,7 @@ export async function setupMemory(ctx, core) {
     const row = capture.after(event)
     const turn = cases === 'auto' && state(event.sessionID).caseTurn
     if (row && turn && !turn.mutationStarted && !turn.delivered && !turn.checkedTool) {
-      turn.observed = [...new Set([...turn.observed, ...testCue(event)])].slice(0, 4)
+      turn.observed = [...new Set([...turn.observed, ...testCue(event, source.project)])].slice(0, 4)
     }
     scheduleSync()
     return row

@@ -106,6 +106,31 @@ test('DSH 真实事件转换支持显式轮次，缺轮次的独立用户原话�
   assert.equal(readCaseRef(foreign, caseRef(searchCases(source, { cue: 'paired_export' }).cards[0].evidence[0])).state, 'denied')
 })
 
+test('手动检索先按项目限定候选，BM25 排名和同分顺序可重复', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'case-rank-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const local = path.join(root, 'local')
+  const foreign = path.join(root, 'foreign')
+  fs.mkdirSync(local)
+  fs.mkdirSync(foreign)
+  const row = (id, ws, text) => JSON.stringify({ id, ws, text, kind: 'decision' })
+  const lines = [
+    ...Array.from({ length: 24 }, (_, i) => row(`foreign-${i}`, foreign, 'shared')),
+    row('long', local, 'shared extra words in longer card'),
+    row('both', local, 'shared rare_anchor'),
+    row('first', local, 'shared'),
+    row('second', local, 'shared'),
+  ]
+  fs.writeFileSync(path.join(root, 'stream.jsonl'), lines.join('\n') + '\n')
+  const source = caseSource('opencode', root, local)
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  const search = cue => searchCases(source, { cue }).cards
+  assert.deepEqual(search('shared').map(card => card.evidence[0].id), ['first', 'second', 'both', 'long'])
+  assert.equal(search('shared rare_anchor')[0].evidence[0].id, 'both')
+  assert.equal(syncCaseIndex(source, { rebuild: true }).state, 'ready')
+  assert.deepEqual(search('shared').map(card => card.evidence[0].id), ['first', 'second', 'both', 'long'])
+})
+
 test('长证据默认限量，下一范围不切断 emoji', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-case-page-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

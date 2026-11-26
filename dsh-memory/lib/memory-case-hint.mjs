@@ -1,3 +1,5 @@
+import path from 'node:path'
+import { realpathSync } from 'node:fs'
 import { caseRef, key } from './memory-cards.mjs'
 
 const TEST_PATH = /^[\w./-]+\.(?:c|m)?js$/
@@ -13,9 +15,14 @@ export function tapPath(tool, input) {
   return SAFE_PATH(match?.[1]) ? match[1] : null
 }
 
-export function testObservation(input, output, beforeHash, afterHash) {
+export function testObservation(input, result, beforeHash, afterHash) {
   const path = tapPath('shell', input)
-  const { content, exitCode } = output || {}
+  const { output, metadata } = result || {}
+  if (output && (metadata?.status !== 'completed' || metadata.truncated !== false
+    || metadata.exit !== output.exitCode || metadata.signal || output.signal
+    || metadata.timeout || metadata.killed)) return null
+  const content = output ? output.output : result?.content
+  const exitCode = output ? output.exitCode : result?.exitCode
   if (!path || !/^[a-f0-9]{64}$/.test(beforeHash || '') || beforeHash !== afterHash
     || typeof content !== 'string' || content.length > 16000 || ![0, 1].includes(exitCode)) return null
   const normalized = content.replaceAll('\r\n', '\n')
@@ -30,14 +37,34 @@ export function testObservation(input, output, beforeHash, afterHash) {
   return passed || failed ? { path, name, passed, sha: beforeHash } : null
 }
 
-export function testCue(event) {
+export function testCue(event, project) {
   if (!/^(?:[\w-]+[._])?(?:grep|rg|read)$/i.test(event.tool) || event.status !== 'completed') return []
+  const found = new Set()
+  const add = (file, name) => {
+    if (SAFE_PATH(file) && TEST_NAME.test(name)) found.add(key('test', file, name))
+  }
+  if (Array.isArray(event.result?.output)) {
+    const matches = event.result.output
+    if (!project || event.result.metadata?.truncated || matches.length > 64) return []
+    for (const match of matches) {
+      const file = match?.entry?.path
+      if (match?.entry?.type !== 'file' || typeof file !== 'string' || !file
+        || typeof match.text !== 'string') continue
+      const label = /^\s*(?:test|it)\((['"])([^'"\r\n]+)\1/.exec(match.text.slice(0, 512))
+      if (!label) continue
+      try {
+        const relative = path.relative(project, realpathSync.native(path.resolve(project, file))).split(path.sep).join('/')
+        add(relative, label[2])
+      } catch {}
+      if (found.size === 4) break
+    }
+    return [...found]
+  }
   const text = typeof event.result === 'string' ? event.result : event.result?.content
   if (typeof text !== 'string') return []
-  const found = new Set()
   const pattern = /^([\w./-]+):\d+:\s*(?:test|it)\((['"])([^'"\r\n]+)\2/gm
   for (const [, file, , name] of text.slice(0, 8192).matchAll(pattern)) {
-    if (SAFE_PATH(file) && TEST_NAME.test(name)) found.add(key('test', file, name))
+    add(file, name)
     if (found.size === 4) break
   }
   return [...found]

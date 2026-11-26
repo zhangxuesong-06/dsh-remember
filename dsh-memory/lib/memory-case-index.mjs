@@ -391,9 +391,12 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
     }
     const query = terms(cue).slice(0, 16).map(encoded).join(' OR ')
     if (!query) return { state: 'ready', cards: [] }
+    // Explicit BM25 lets SQLite use a bounded top-N sort instead of FTS5's full rank sort.
     const rows = db.prepare(`SELECT cards.card FROM (
-      SELECT rowid FROM card_fts WHERE card_fts MATCH ? ORDER BY rank LIMIT ?
-    ) AS hits JOIN cards ON cards.rowid=hits.rowid AND cards.project=?`)
+      SELECT rowid, bm25(card_fts) AS score FROM card_fts WHERE card_fts MATCH ?
+      ORDER BY score, rowid LIMIT ?
+    ) AS hits JOIN cards ON cards.rowid=hits.rowid AND cards.project=?
+    ORDER BY hits.score, hits.rowid`)
       .all(`project : ${projectTerm(source.project)} AND terms : (${query})`, count, source.project)
     return { state: 'ready', cards: rows.map(row => JSON.parse(row.card)) }
   } catch { return unavailable() }

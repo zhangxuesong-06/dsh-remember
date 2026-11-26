@@ -358,15 +358,33 @@ test('模糊需求在读到回归锚点后、第一次修改前收到可回读�
     return event.messages[0].content
   }
   assert.doesNotMatch(await next(), /memory-case/)
-  await hooks['execute.after']({ sessionID: 'new', id: 'grep', tool: 'grep', status: 'completed',
-    result: { content: `${file}:4:test('${name}', () => assert.equal(count, 1))` } })
+  const grep = { sessionID: 'new', id: 'grep', tool: 'grep', status: 'completed', input: { pattern: name },
+    result: {
+      output: [{ entry: { path: file, type: 'file' }, line: 4,
+        text: `test('${name}', () => assert.equal(count, 1))\n` }],
+      content: [{ type: 'text', text: `Found 1 match\n${file}:\n  Line 4: test('${name}', () => assert.equal(count, 1))\n` }],
+      metadata: { matches: 1, truncated: false },
+    } }
+  await hooks['execute.before'](grep)
+  await hooks['execute.after'](grep)
   const shown = await next()
   assert.match(shown, /历史回归已通过：retries share export_id/)
   const ref = shown.match(/case:[\w:-]+/)[0]
   assert.match(JSON.parse((await tools.find(tool => tool.name === 'read').execute({ ref })).content).text, /# pass 1/)
   assert.doesNotMatch(await next(), /memory-case/)
-  await hooks.compaction({ sessionID: 'new', id: 'compact-new' })
-  assert.match(await next(), /历史回归已通过/)
+  await hooks.compaction({ sessionID: 'new', id: 'compact-failed' })
+  assert.doesNotMatch(await next(), /memory-case/)
+  canonical.push({ id: 'compact-failed', type: 'compaction', status: 'failed' })
+  assert.doesNotMatch(await next(), /memory-case/)
+  for (const id of ['compact-first', 'compact-second', 'compact-third']) {
+    await hooks.compaction({ sessionID: 'new', id })
+    canonical.push({ id, type: 'compaction', status: 'completed' })
+    assert.equal(await next(), shown)
+    assert.doesNotMatch(await next(), /memory-case/)
+  }
+  canonical.push({ id: 'compact-over-budget', type: 'compaction', status: 'completed' })
+  assert.doesNotMatch(await next(), /memory-case/)
+  canonical.length = 1
   for (const order of [['write', 'grep'], ['grep', 'write']]) {
     assert.equal(runCaseSync(caseSource('opencode', root, root)).state, 'ready')
     const sid = order.join('-')

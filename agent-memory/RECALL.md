@@ -51,7 +51,9 @@ DSH 和 WorkBuddy 的流里九成是 `tool/call` / `tool/result`。默认只收�
 
 共享 CLI 的 `--source` 可指向显式登记的别名。`MEMORY_CASE_SOURCES` 接收 JSON，例如 `{"old":{"adapter":"opencode","root":"C:/isolated/ledger","project":"C:/isolated/previous","fromProject":"C:/isolated/current"}}`。在 `fromProject` 用 `recall "export_id" --cases --source old` 查询，并用 `show "<case 引用>" --source old` 回读。撤去别名即撤回后续访问。DSH 别名的 `root` 指单独的工作区或身份线账本。
 
-OpenCode 的 `auto` 是试验开关。插件只在当前项目根的任务开始或读到测试锚点后查找已验证案例。匹配要求测试路径、名称和当前测试文件版本一致。首次可能写入后跳过首次提示。模拟宿主测试覆盖压缩请求后的补发。每次提示最多 512 UTF-8 字节，每轮合计最多 1,536 字节。实际宿主送达及整题模型收益见本地工作报告的验收状态。
+OpenCode 的 `auto` 是试验开关。插件只在当前项目根的任务开始或读到测试锚点后查找已验证案例。匹配要求测试路径、名称和当前测试文件版本一致。首次可能写入后跳过首次提示。同轮规范历史出现新的已完成压缩记录时，复核原证据后允许补发同一条。每次提示最多 512 UTF-8 字节，每轮合计最多 1,536 字节。
+
+用 `node agent-memory/probe-opencode-cases.mjs "<OpenCode CLI 的绝对路径>"` 检查隔离宿主的失败与通过证据、首次写入前的提示、先写后读保持静默和原文回读。加 `--compact` 检查连续两次压缩，每次完成后同一提示补发一次。探针只使用临时配置、账本、项目和本机模拟提供方。整题模型收益仍由下面的三组对照衡量。
 
 OpenCode 可用 `node tools/mem-maintenance.mjs --root "<账本目录>" --case-index-sync` 或 `--case-index-rebuild` 维护案例索引。其余四端在上述 CLI 使用 `case-index-sync` 或 `case-index-rebuild`，DSH 在命令后附工作区。关闭试验时设 `MEMORY_CASE_RECALL=off` 或清除这个变量。日常原文查询仍可访问源账本。
 
