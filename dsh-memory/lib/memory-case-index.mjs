@@ -393,10 +393,27 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
       const get = db.prepare('SELECT card FROM cards WHERE project=? AND id=?')
       return { state: 'ready', cards: [...ids].map(id => JSON.parse(get.get(source.project, id).card)) }
     }
-    const words = terms(cue).slice(0, 16).map(encoded)
-    if (!words.length) return { state: 'ready', cards: [] }
-    const match = expression => `project:${projectTerm(source.project)} AND terms:(${expression})`
+    let words = terms(cue).slice(0, 16).map(encoded)
+    const project = projectTerm(source.project)
+    const match = expression => `project:${project} AND terms:(${expression})`
     const byLength = 'FROM card_fts WHERE card_fts MATCH ? ORDER BY rowid LIMIT ?'
+    // A term with no scoped hit contributes zero to SQLite's BM25 for this project.
+    // Check it only when the full match cannot fill the requested result count.
+    let cutoff
+    let nth
+    if (words.length > 1) {
+      db.exec('BEGIN')
+      nth = db.prepare(`SELECT rowid ${byLength} OFFSET ?`)
+      cutoff = nth.get(match(words.join(' AND ')), 1, count - 1)
+      if (!cutoff) {
+        const present = words.filter(word => nth.get(match(word), 1, 0))
+        if (present.length > 1 && present.length < words.length) {
+          cutoff = nth.get(match(present.join(' AND ')), 1, count - 1)
+        }
+        words = present
+      }
+    }
+    if (!words.length) return { state: 'ready', cards: [] }
     const score = 'SELECT rowid, bm25(card_fts) AS score FROM card_fts WHERE card_fts MATCH ?'
     const rank = `score, rowid % ${CARD_ROWID_SPAN}`
     let hits = `SELECT rowid, rowid AS score ${byLength}`
@@ -404,10 +421,6 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
     let args = [any, count]
     if (words.length > 1) {
       const full = match(words.join(' AND '))
-      // Keep the boundary and the scored rows in one SQLite snapshot.
-      db.exec('BEGIN')
-      const nth = db.prepare(`SELECT rowid ${byLength} OFFSET ?`)
-      const cutoff = nth.get(full, 1, count - 1)
       if (words.length <= 3 && !cutoff) {
         let matches
         if (words.length === 2) {

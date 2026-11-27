@@ -18,7 +18,7 @@ function currentRegression(project, test) {
   } catch { return false }
 }
 
-export async function setupMemory(ctx, core) {
+export async function setupMemory(ctx, core, maintenance = fileURLToPath(new URL('./mem-maintenance.mjs', import.meta.url))) {
   const ws = ctx.location?.directory || ''
   const cases = mode()
   const source = cases === 'off' ? null : caseSource('opencode', core.ROOT, ws, { checkpointed: true })
@@ -45,10 +45,9 @@ export async function setupMemory(ctx, core) {
   // 不注册 Windows 计划任务；进程退出后不补跑，下次打开 harness 再说。
   try {
     if (process.env.MEMORY_DISABLE_MAINTENANCE !== '1') {
-      const script = fileURLToPath(new URL('./mem-maintenance.mjs', import.meta.url))
       const base = (process.execPath || '').split(/[\\/]/).pop() || ''
       const node = /^node(\.exe)?$/i.test(base) ? process.execPath : (process.env.OPENCODE_NODE || 'node')
-      const child = spawn(node, [script, '--root', core.ROOT, '--due'], {
+      const child = spawn(node, [maintenance, '--root', core.ROOT, '--due'], {
         detached: true, stdio: 'ignore', windowsHide: true, env: process.env,
       })
       child.on('error', (error) => core.diag('维护进程失败：' + error.message))

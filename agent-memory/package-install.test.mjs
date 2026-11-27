@@ -21,6 +21,45 @@ function run(binary, args, env) {
   return result.stdout
 }
 
+test('OpenCode 从源码运行维护，运行时缓存只保存宿主模块', (t) => {
+  const { dir, env } = fixture(t)
+  const entry = pathToFileURL(path.join(repo, 'plugin', 'self-memory', 'index.js')).href
+  const code = `
+    import { registerHooks } from 'node:module'
+    import fs from 'node:fs'
+    import path from 'node:path'
+    import { setTimeout } from 'node:timers/promises'
+    registerHooks({ resolve(name, context, next) {
+      return name === '@opencode/plugin'
+        ? { url: 'data:text/javascript,export const Plugin={define:value=>value}', shortCircuit: true }
+        : next(name, context)
+    } })
+    const { default: plugin } = await import(${JSON.stringify(entry)})
+    const root = process.env.OPENCODE_MEM_HOME
+    const hook = async () => () => {}
+    const cleanup = await plugin.setup({
+      location: { directory: root }, session: { hook }, tool: {}, event: {}, command: {},
+    })
+    const file = path.join(root, 'maintenance.json')
+    const lock = path.join(root, '.maintenance-lock')
+    const finished = () => fs.existsSync(file) && !fs.existsSync(lock)
+    for (let i = 0; !finished() && i < 100; i++) await setTimeout(50)
+    if (!finished()) throw new Error('Maintenance did not finish')
+    const cache = path.join(root, 'runtime')
+    console.log(JSON.stringify({
+      maintenance: JSON.parse(fs.readFileSync(file, 'utf8')),
+      cacheFiles: fs.readdirSync(cache, { recursive: true }).map(name => path.basename(name)),
+    }))
+    await cleanup?.()
+  `
+  const config = { ...env, OPENCODE_MEM_HOME: dir, MEMORY_CASE_RECALL: 'off', MEMORY_DISABLE_MAINTENANCE: '0' }
+  const result = JSON.parse(run(process.execPath, ['--input-type=module', '-e', code], config))
+  assert.equal(result.maintenance.root, dir)
+  assert.ok(result.maintenance.snapshot)
+  assert.ok(result.cacheFiles.includes('mem-plugin.mjs'))
+  assert.ok(!result.cacheFiles.includes('mem-maintenance.mjs'))
+})
+
 test('Windows DSH 安装复用发布清单，升级移除开发文件并保留现有配置', { skip: process.platform !== 'win32' }, async (t) => {
   const { dir, env } = fixture(t)
   const dsh = path.join(dir, '.dsh')

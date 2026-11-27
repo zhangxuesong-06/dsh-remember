@@ -1,5 +1,4 @@
 // OpenCode entrypoint. Capture and retrieval stay testable without a running server.
-// Runtime generation 24: explicit runtime allowlist; cross-harness query moved out of the plugin.
 import { Plugin } from '@opencode/plugin'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -16,18 +15,19 @@ export default Plugin.define({
     try {
       // Real versioned paths also refresh transitive imports. URL query strings alone
       // do not reliably invalidate the desktop server's transformed module cache.
-      // Explicit allowlist: only modules the plugin runtime actually imports or spawns.
-      // CLI/tools live elsewhere and must not be copied into the runtime bundle.
+      // OpenCode imports transformed modules from the cache. The separate Node
+      // maintenance process can run the existing script directly from the checkout.
       const RUNTIME = [
         'mem-core.mjs', 'mem-journal.mjs', 'mem-artifacts.mjs', 'mem-facets.mjs', 'mem-assoc.mjs',
-        'mem-tokenize.mjs', 'mem-recall.mjs', 'mem-capture.mjs', 'mem-context.mjs', 'mem-plugin.mjs', 'mem-maintenance.mjs',
+        'mem-tokenize.mjs', 'mem-recall.mjs', 'mem-capture.mjs', 'mem-context.mjs', 'mem-plugin.mjs',
       ]
+      const maintenance = 'mem-maintenance.mjs'
       const shared = ['memory-cards.mjs', 'memory-case-index.mjs', 'memory-case-hint.mjs', 'tokenize.mjs']
       const names = [...RUNTIME, ...shared].sort()
-      for (const name of RUNTIME) {
+      for (const name of [...RUNTIME, maintenance]) {
         if (!fs.existsSync(path.join(TOOLS, name))) throw new Error('Runtime module missing: ' + name)
       }
-      const unlisted = fs.readdirSync(TOOLS).filter((n) => /^mem-.*\.mjs$/.test(n) && !RUNTIME.includes(n))
+      const unlisted = fs.readdirSync(TOOLS).filter((n) => /^mem-.*\.mjs$/.test(n) && n !== maintenance && !RUNTIME.includes(n))
       if (unlisted.length) throw new Error('Runtime module not listed: ' + unlisted.join(', '))
       const files = names.map((name) => [name, fs.readFileSync(name === 'mem-recall.mjs' || shared.includes(name)
         ? path.resolve(TOOLS, '../dsh-memory/lib', name) : path.join(TOOLS, name))])
@@ -49,7 +49,7 @@ export default Plugin.define({
       }
       const core = await import(pathToFileURL(path.join(bundle, 'mem-core.mjs')).href)
       const { setupMemory } = await import(pathToFileURL(path.join(bundle, 'mem-plugin.mjs')).href)
-      return await setupMemory(ctx, core)
+      return await setupMemory(ctx, core, path.join(TOOLS, maintenance))
     } catch (error) {
       console.error('[self-memory] 载入失败：' + error.message)
     }

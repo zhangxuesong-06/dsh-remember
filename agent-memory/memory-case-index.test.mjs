@@ -167,7 +167,8 @@ test('按词数读取高频词，混合命中仍与完整 BM25 的结果一致',
       WHERE card_fts MATCH ? ORDER BY bm25(card_fts), cards.rowid LIMIT ?`)
     for (const cue of ['shared', 'shared dense', 'shared unique', 'replacement', 'unmatched', 'shared unknown',
       'shared sparse', 'shared dense sparse rare', 'dense sparse', 'shared dense replacement', 'shared dense unique',
-      'unique shared dense', 'shared sparse unique', 'shared unknown sparse', 'dense sparse rare', 'aax bbx ccx']) {
+      'unique shared dense', 'shared sparse unique', 'shared unknown sparse', 'dense sparse rare', 'aax bbx ccx',
+      'shared dense unindexed one_unknown', 'shared unindexed one_unknown two_unknown', 'shared foreign_only']) {
       for (const limit of [1, 3, 8]) {
         assert.deepEqual(searchCases(source, { cue, limit }).cards,
           oracle.all(match(cue), limit).map(row => JSON.parse(row.card)), `${cue} (${limit})`)
@@ -188,6 +189,29 @@ test('长证据默认限量，下一范围不切断 emoji', t => {
   assert.equal(page.text, body.slice(0, 11999))
   assert.equal(readCaseRef(source, ref, page.next).text, body.slice(11999, 23998))
   assert.equal(page.total, body.length)
+})
+
+test('项目内只有一个有效词时，长查询走同一条按长度读取的路径', t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'case-missing-terms-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const foreign = path.join(root, 'foreign')
+  fs.mkdirSync(foreign)
+  const source = caseSource('codex', root, root)
+  const rows = [
+    { id: 'first', ws: root, text: 'shared' },
+    { id: 'long', ws: root, text: 'shared with more words' },
+    { id: 'other', ws: foreign, text: 'shared foreign_only' },
+  ]
+  fs.writeFileSync(path.join(root, 'stream.jsonl'),
+    rows.map(row => JSON.stringify({ ...row, kind: 'decision' })).join('\n') + '\n')
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  const expected = searchCases(source, { cue: 'shared' })
+  const prepare = DatabaseSync.prototype.prepare
+  const SQL = t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    return prepare.call(this, sql)
+  })
+  assert.deepEqual(searchCases(source, { cue: 'shared foreign_only one_unknown two_unknown' }), expected)
+  assert.ok(SQL.mock.calls.every(call => !call.arguments[0].includes('bm25(')))
 })
 
 test('五端入口查询同一格式，跨端授权撤销立即生效', t => {
