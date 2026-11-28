@@ -421,7 +421,7 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
     let args = [any, count]
     if (words.length > 1) {
       const full = match(words.join(' AND '))
-      if (words.length <= 3 && !cutoff) {
+      if (words.length <= 4 && !cutoff) {
         let matches
         if (words.length === 2) {
           const [a, b] = words
@@ -431,7 +431,9 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
           // terms. Cards shorter than it with those terms already outrank it.
           const groups = new Set()
           const shortest = db.prepare(`SELECT terms ${byLength}`)
-          for (let mask = 1; mask < 8; mask++) {
+          for (let mask = 1; mask < (1 << words.length); mask++) {
+            const bits = mask.toString(2).split('0').join('').length
+            if (bits > 2) continue
             const subset = words.filter((_, index) => mask & (1 << index))
             for (const { terms: text } of shortest.all(match(subset.join(' AND ')), count)) {
               const present = text.split(' ')

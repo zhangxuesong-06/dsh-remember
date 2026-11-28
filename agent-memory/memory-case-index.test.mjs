@@ -214,6 +214,34 @@ test('项目内只有一个有效词时，长查询走同一条按长度读取�
   assert.ok(SQL.mock.calls.every(call => !call.arguments[0].includes('bm25(')))
 })
 
+test('四词完整共现不足时，候选分组仍保留完整 BM25 排序', t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'case-four-terms-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const source = caseSource('codex', root, root)
+  const rows = [
+    ['alpha-beta', 'alpha beta'],
+    ['alpha-gamma', 'alpha gamma'],
+    ['alpha-delta', 'alpha delta'],
+    ['beta-gamma', 'beta gamma'],
+    ['beta-delta', 'beta delta'],
+    ['gamma-delta', 'gamma delta'],
+    ['alpha-only', 'alpha'],
+    ['beta-only', 'beta'],
+    ['gamma-only', 'gamma'],
+    ['delta-only', 'delta'],
+  ]
+  fs.writeFileSync(path.join(root, 'stream.jsonl'),
+    rows.map(([id, text]) => JSON.stringify({ id, kind: 'decision', ws: root, text })).join('\n') + '\n')
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  const oracle = searchCases(source, { cue: 'alpha beta gamma delta' })
+  const prepare = DatabaseSync.prototype.prepare
+  const SQL = t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    return prepare.call(this, sql)
+  })
+  assert.deepEqual(searchCases(source, { cue: 'alpha beta gamma delta' }), oracle)
+  assert.ok(SQL.mock.calls.some(call => call.arguments[0].includes('UNION ALL')))
+})
+
 test('五端入口查询同一格式，跨端授权撤销立即生效', t => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-case-adapter-'))
   t.after(() => fs.rmSync(base, { recursive: true, force: true }))
