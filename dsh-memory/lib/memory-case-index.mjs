@@ -26,7 +26,7 @@ export function caseProject(cwd) {
   }
 }
 
-export function caseSource(adapter, root, cwd, { singleProject = false, checkpointed = false } = {}) {
+export function caseSource(adapter, root, cwd, { singleProject = false, tailPolicy } = {}) {
   const origin = restoreOrigin(adapter, root)
   let project
   try {
@@ -34,7 +34,7 @@ export function caseSource(adapter, root, cwd, { singleProject = false, checkpoi
     else if (cwd && path.isAbsolute(cwd)) project = caseProject(cwd)
   } catch {}
   const streams = adapter === 'opencode' ? ['stream', 'tools'] : ['stream']
-  return { adapter, root, project, singleProject, streams, checkpointed, origin }
+  return { adapter, root, project, singleProject, streams, tailPolicy, origin }
 }
 
 function restoreOrigin(adapter, root) {
@@ -102,9 +102,18 @@ function hashPrefix(fd, offset) {
   return hash
 }
 
-function statID(stat) { return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` }
+export function statID(stat) { return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}` }
 
-function scopeOf(source, row) {
+export function sameVersion(stat, saved) {
+  return saved.mtime === stat.mtimeMs && saved.ctime === stat.ctimeMs
+}
+
+function compatibleCursor(stat, prior) {
+  return !prior || (prior.identity === statID(stat) && (stat.size > prior.size
+    || (stat.size === prior.size && sameVersion(stat, prior))))
+}
+
+export function scopeOf(source, row) {
   if (source.singleProject) return source.project
   const workspace = row.workspace ?? row.ws
   if (typeof workspace !== 'string' || !path.isAbsolute(workspace)) return null
@@ -155,7 +164,7 @@ function mapRow(source, row, stream, offset, hash, bytes) {
 const terms = text => [...new Set(tokenize(String(text).slice(0, 2048)))].slice(0, 64)
 const encoded = word => 'x' + Buffer.from(word).toString('hex')
 const projectTerm = project => 'p' + digest(project).slice(0, 32)
-const toolGroup = (sid, call, id) => key('tool', sid, sid && call ? call : id)
+export const toolGroup = (sid, call, id) => key('tool', sid, sid && call ? call : id)
 
 function saveCard(prepare, project, card) {
   if (!card) return
@@ -259,8 +268,7 @@ function syncStream(source, prepare, stream, budget, rebuild) {
     let offset = initialOffset
     let skipping = prior?.skipping || 0
     let gaps = prior?.gaps || 0
-    if (prior && (prior.identity !== statID(stat) || stat.size < prior.size
-      || (stat.size === prior.size && (stat.mtimeMs !== prior.mtime || stat.ctimeMs !== prior.ctime)))) throw new Error('Stale source')
+    if (!compatibleCursor(stat, prior)) throw new Error('Stale source')
     if (stat.size === offset || budget === 0) return { used: 0, pending: stat.size > offset, gaps }
     const prefix = hashPrefix(fd, offset)
     if (prior && prefix.copy().digest('hex') !== prior.prefix) throw new Error('Stale source')
@@ -349,9 +357,9 @@ export function caseWatermark(source) {
   }))
 }
 
-function fresh(source, db, watermark, current, pendingRecall) {
-  const checkpoint = (watermark || pendingRecall) && source.checkpointed
-    ? JSON.parse(fs.readFileSync(path.join(sourceRoot(source), 'integrity.json'), 'utf8')).files : null
+function fresh(source, db, options) {
+  const { watermark } = options
+  const checkTail = source.tailPolicy?.(source, options)
   for (const stream of source.streams) {
     const prior = db.prepare('SELECT * FROM cursors WHERE stream=?').get(stream)
     if (watermark && ((prior?.offset || 0) < watermark[stream] || prior?.gaps)) return false
@@ -359,38 +367,15 @@ function fresh(source, db, watermark, current, pendingRecall) {
     try {
       fd = fs.openSync(streamFile(source, stream), 'r')
       const stat = fs.fstatSync(fd)
-      if (prior && (statID(stat) !== prior.identity || stat.size < prior.size
-        || (stat.size === prior.size && (stat.mtimeMs !== prior.mtime || stat.ctimeMs !== prior.ctime)))) return false
-      const checkTail = watermark || (pendingRecall && stream === 'tools')
-      if (!checkTail && stat.size > (prior?.size || 0)) return false
-      const saved = checkpoint?.[stream + '.jsonl']
-      if (checkpoint && stat.size) {
-        if (saved?.bytes !== stat.size || saved.identity !== statID(stat)
-          || saved.mtime !== stat.mtimeMs || saved.ctime !== stat.ctimeMs) return false
-      }
-      if (checkTail && stat.size > (prior?.offset || 0)) {
-        const offset = prior?.offset || 0
-        if (stat.size - offset > 16 * 1024) return false
-        const tail = read(fd, offset, stat.size - offset)
-        if (tail.at(-1) !== 10) return false
-        if (!watermark) {
-          const row = JSON.parse(tail.toString('utf8'))
-          // The journal proves the preceding bytes without rereading them.
-          // A new call cannot project a card unless its group already exists.
-          if (saved?.previousSha256 !== (prior?.prefix ?? digest('')) || row.phase !== 'call'
-            || !/^mem[._]recall$/.test(row.tool) || !row.sid || !row.callID || scopeOf(source, row) !== source.project
-            || db.prepare('SELECT 1 FROM events WHERE project=? AND group_id=? LIMIT 1')
-              .get(source.project, toolGroup(row.sid, row.callID))) return false
-          continue
-        }
-        for (const line of tail.toString('utf8').split('\n')) {
-          if (!line.trim()) continue
-          const row = JSON.parse(line)
-          if (['correction', 'withdrawal'].includes(row.kind || row.type)) return false
-          if (stream === 'tools' && row.caseTest
-            && (row.sid !== current?.sid || (row.turnID ?? row.turn) !== current?.turn)) return false
-        }
-      }
+      if (!compatibleCursor(stat, prior)) return false
+      const offset = prior?.offset || 0
+      const remaining = stat.size - offset
+      const readTail = () => read(fd, offset, remaining)
+      const allowed = checkTail?.({ db, stream, prior, stat, remaining, readTail })
+      if (allowed === true) continue
+      if (allowed === false || stat.size > (prior?.size || 0)) return false
+      // A cursor can see the full file size after processing only one batch.
+      if (remaining && (remaining >= BATCH || readTail().includes(10))) return false
     } catch (error) {
       if (prior || error.code !== 'ENOENT') return false
     } finally { if (fd !== undefined) fs.closeSync(fd) }
@@ -404,7 +389,8 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
   let db
   try {
     db = open(source, true)
-    if (!fresh(source, db, watermark, current, pendingRecall && source.adapter === 'opencode' && source.checkpointed)) return stale()
+    db.exec('BEGIN')
+    if (!fresh(source, db, { watermark, current, pendingRecall })) return stale()
     if (watermark) {
       const lookup = db.prepare('SELECT id FROM auto_keys WHERE project=? AND key=? LIMIT 9')
       const ids = new Set(keys.slice(0, 4).flatMap(value => lookup.all(source.project, value).map(row => row.id)))
@@ -421,7 +407,6 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
     let cutoff
     let nth
     if (words.length > 1) {
-      db.exec('BEGIN')
       nth = db.prepare(`SELECT rowid ${byLength} OFFSET ?`)
       cutoff = nth.get(match(words.join(' AND ')), 1, count - 1)
       if (!cutoff) {
@@ -438,38 +423,31 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
     let hits = `SELECT rowid, rowid AS score ${byLength}`
     const any = match(words.join(' OR '))
     let args = [any, count]
-    if (words.length > 1) {
-      const full = match(words.join(' AND '))
-      if (words.length <= 4 && !cutoff) {
-        let matches
-        if (words.length === 2) {
-          const [a, b] = words
-          matches = [full, match(`${a} NOT ${b}`), match(`${b} NOT ${a}`)]
-        } else {
-          // Each exact match set can contribute a top-N card. Probe every
-          // subset because shorter partial matches can hide a stronger hit.
-          const groups = new Set()
-          const shortest = db.prepare(`SELECT terms ${byLength}`)
-          for (let mask = 1; mask < (1 << words.length); mask++) {
-            const subset = words.filter((_, index) => mask & (1 << index))
-            const expression = match(subset.join(' AND '))
-            if (groups.has(expression)) continue
-            for (const { terms: text } of shortest.all(expression, count)) {
-              const present = text.split(' ')
-              groups.add(match(words.filter(word => present.includes(word)).join(' AND ')))
-            }
+    if (words.length > 1 && (!cutoff || nth.get(any, 1, count - 1).rowid !== cutoff.rowid)) {
+      // A full match far down the length order still leaves a broad scoring scan.
+      const broad = cutoff && words.length <= 4 && (nth.get(any, 1, 63)?.rowid ?? Infinity) < cutoff.rowid
+      if (words.length <= 4 && (!cutoff || broad)) {
+        // For a card matching a subset, the N shortest cards containing all
+        // those terms either include it or outrank it. Supersets can only help.
+        const groups = new Set()
+        const shortest = db.prepare(`SELECT terms ${byLength}`)
+        for (let mask = 1; mask < (1 << words.length); mask++) {
+          const subset = words.filter((_, index) => mask & (1 << index))
+          const expression = match(subset.join(' AND '))
+          if (groups.has(expression)) continue
+          for (const { terms: text } of shortest.all(expression, count)) {
+            const present = text.split(' ')
+            groups.add(match(words.filter(word => present.includes(word)).join(' AND ')))
           }
-          if (!groups.size) return { state: 'ready', cards: [] }
-          matches = [...groups]
         }
-        // BM25 for a subset only weakens a card's score. Keep its best score
-        // if it appears in more than one group.
+        // Keep an overlapping card's best score across groups.
+        const matches = [...groups]
         const group = `SELECT * FROM (${score} ORDER BY rowid LIMIT ?)`
         hits = `SELECT rowid, min(score) AS score FROM (${matches.map(() => group).join(' UNION ALL ')})
           GROUP BY rowid ORDER BY ${rank} LIMIT ?`
         args = [...matches.flatMap(expression => [expression, count]), count]
-      } else if (!cutoff || nth.get(any, 1, count - 1).rowid !== cutoff.rowid) {
-        // The Nth full match caps the candidates. Matching boundaries need no scoring.
+      } else {
+        // The Nth full match caps the candidates.
         hits = `${score}${cutoff ? ' AND rowid<=?' : ''} ORDER BY ${rank} LIMIT ?`
         args = [any, ...(cutoff ? [cutoff.rowid] : []), count]
       }

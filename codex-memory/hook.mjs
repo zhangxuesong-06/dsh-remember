@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import { codexRoot } from '../agent-memory/repo.mjs'
-import { createJournal, sha256 } from '../tools/mem-journal.mjs'
+import { openJournal, sha256 } from '../tools/mem-journal-write.mjs'
 import { startCaseSync } from '../dsh-memory/lib/memory-case-index.mjs'
 
 function capture() {
@@ -12,7 +12,7 @@ function capture() {
       && typeof text === 'string' && text.trim()) {
     const eventKey = sha256(JSON.stringify([hook, sid, turnID, text]))
     const root = codexRoot()
-    createJournal(root).append('stream.jsonl', {
+    openJournal(root).append('stream.jsonl', {
       who, type: `${who}/message`, sid, turnID, ws, text,
       source: { type: 'codex.hook', hook },
     }, { dedupeKey: eventKey })

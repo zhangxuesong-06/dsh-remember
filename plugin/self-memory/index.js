@@ -18,7 +18,7 @@ export default Plugin.define({
       // OpenCode imports transformed modules from the cache. The separate Node
       // maintenance process can run the existing script directly from the checkout.
       const RUNTIME = [
-        'mem-core.mjs', 'mem-journal.mjs', 'mem-artifacts.mjs', 'mem-facets.mjs', 'mem-assoc.mjs',
+        'mem-runtime.mjs', 'mem-journal-write.mjs', 'mem-journal-state.mjs', 'mem-artifacts.mjs', 'mem-facets.mjs', 'mem-assoc.mjs',
         'mem-tokenize.mjs', 'mem-recall.mjs', 'mem-capture.mjs', 'mem-context.mjs', 'mem-plugin.mjs',
       ]
       const maintenance = 'mem-maintenance.mjs'
@@ -27,7 +27,8 @@ export default Plugin.define({
       for (const name of [...RUNTIME, maintenance]) {
         if (!fs.existsSync(path.join(TOOLS, name))) throw new Error('Runtime module missing: ' + name)
       }
-      const unlisted = fs.readdirSync(TOOLS).filter((n) => /^mem-.*\.mjs$/.test(n) && n !== maintenance && !RUNTIME.includes(n))
+      const cliOnly = [maintenance, 'mem-core.mjs', 'mem-journal.mjs', 'mem-verify-blobs.mjs']
+      const unlisted = fs.readdirSync(TOOLS).filter((n) => /^mem-.*\.mjs$/.test(n) && !cliOnly.includes(n) && !RUNTIME.includes(n))
       if (unlisted.length) throw new Error('Runtime module not listed: ' + unlisted.join(', '))
       const files = names.map((name) => [name, fs.readFileSync(name === 'mem-recall.mjs' || shared.includes(name)
         ? path.resolve(TOOLS, '../dsh-memory/lib', name) : path.join(TOOLS, name))])
@@ -47,7 +48,7 @@ export default Plugin.define({
       for (const [name, bytes] of files) {
         if (!fs.readFileSync(path.join(bundle, name)).equals(bytes)) throw new Error('Runtime bundle differs: ' + name)
       }
-      const core = await import(pathToFileURL(path.join(bundle, 'mem-core.mjs')).href)
+      const core = await import(pathToFileURL(path.join(bundle, 'mem-runtime.mjs')).href)
       const { setupMemory } = await import(pathToFileURL(path.join(bundle, 'mem-plugin.mjs')).href)
       return await setupMemory(ctx, core, path.join(TOOLS, maintenance))
     } catch (error) {

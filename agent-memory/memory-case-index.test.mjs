@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { caseSource, caseWatermark, readCaseRef, readEvidence, searchCases, syncCaseIndex } from '../dsh-memory/lib/memory-case-index.mjs'
+import { openCodeTailPolicy } from '../dsh-memory/lib/memory-case-hint.mjs'
 import { caseRef, digest } from '../dsh-memory/lib/memory-cards.mjs'
 import { eventToRecords } from '../dsh-memory/lib/capture.mjs'
 import { Ledger } from '../dsh-memory/lib/store.mjs'
@@ -40,7 +41,7 @@ test('手动案例回查拒绝改过的旧前缀和能补齐既有结果的调�
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const file = path.join(root, 'tools.jsonl')
   const journal = createJournal(root)
-  const source = caseSource('opencode', root, root, { checkpointed: true })
+  const source = caseSource('opencode', root, root, { tailPolicy: openCodeTailPolicy })
   const result = { id: 'result', phase: 'completed', tool: 'mem_recall', sid: 'old', callID: 'unpaired', ws: root }
   const recall = callID => journal.append('tools.jsonl', { ...result, id: callID, callID, phase: 'call' })
   const search = () => searchCases(source, { cue: 'recall', pendingRecall: true })
@@ -170,6 +171,25 @@ test('增量跳过半行，限定项目，并逐字回读源记录', t => {
   fs.writeFileSync(file, raw.replace('🙂原文', '🙂异文').replace('🙂原文', '🙂异文'))
   assert.equal(readEvidence(source, card.evidence[0]).state, 'corrupt')
   assert.equal(searchCases(source, query).state, 'stale')
+})
+
+test('增量同步尚未处理完已落盘的纠正时，查询拒绝旧状态', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'case-pending-correction-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const file = path.join(root, 'stream.jsonl')
+  const source = caseSource('codex', root, root)
+  const row = fields => JSON.stringify({ ws: root, ...fields }) + '\n'
+  fs.writeFileSync(file, row({ id: 'old', kind: 'decision', text: 'legacy_export' }))
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  const query = { cue: 'legacy_export' }
+  const [original] = searchCases(source, query).cards
+  const filler = row({ id: 'padding', text: 'x'.repeat(600_000) })
+  fs.appendFileSync(file, filler.repeat(2) + row({ id: 'fix', kind: 'correction', text: '撤回', supersedes: original.id }))
+  assert.equal(syncCaseIndex(source).pending, true)
+  assert.equal(searchCases(source, query).state, 'stale')
+  assert.equal(syncCaseIndex(source).pending, false)
+  assert.equal(searchCases(source, query).cards[0].status, 'superseded')
+  assert.equal(readCaseRef(source, caseRef(original.evidence[0])).text, 'legacy_export')
 })
 
 test('DSH 真实事件转换支持显式轮次，缺轮次的独立用户原话仍能查阅', t => {
@@ -325,6 +345,31 @@ test('四词完整共现不足时，候选分组仍保留完整 BM25 排序', t 
       assert.equal(expected[0].summary, 'alpha beta gamma filler')
       assert.deepEqual(searchCases(source, { cue, limit }), { state: 'ready', cards: expected })
     }
+  } finally { db.close() }
+})
+
+test('少数较长的四词全匹配不会触发高频候选全量评分', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'case-distant-cutoff-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const source = caseSource('codex', root, root)
+  const rows = Array.from({ length: 200 }, () => 'alpha beta gamma')
+  rows.push(...Array(3).fill('alpha beta gamma delta extra'))
+  fs.writeFileSync(path.join(root, 'stream.jsonl'), rows.map((text, id) =>
+    JSON.stringify({ id: String(id), kind: 'decision', ws: root, text })).join('\n') + '\n')
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  const db = new DatabaseSync(path.join(root, 'memory-cases-codex-v3.sqlite'), { readOnly: true })
+  try {
+    const { rank } = fullRanking(db, source)
+    const cue = 'alpha beta gamma delta'
+    const expected = [1, 3, 8].map(limit => rank(cue, limit))
+    const prepare = DatabaseSync.prototype.prepare
+    const SQL = t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+      return prepare.call(this, sql)
+    })
+    for (const [i, limit] of [1, 3, 8].entries()) {
+      assert.deepEqual(searchCases(source, { cue, limit }).cards, expected[i])
+    }
+    assert.ok(SQL.mock.calls.every(call => !call.arguments[0].includes('AND rowid<=?')))
   } finally { db.close() }
 })
 

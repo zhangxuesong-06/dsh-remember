@@ -11,7 +11,7 @@
 import { pathToFileURL } from 'node:url'
 import { tok } from '../tools/mem-tokenize.mjs'
 import { codexRoot, readStream, streams } from './repo.mjs'
-import { caseSource, caseCommand, caseProject, caseRead, caseResult } from '../dsh-memory/lib/memory-case-index.mjs'
+import { caseSource, caseCommand, caseProject } from '../dsh-memory/lib/memory-case-index.mjs'
 import path from 'node:path'
 import { QUOTE_SIZE, compactLimit, compactQuotes, createTextSearch, quoteFor as quote, serializeRange, speakerOf } from '../tools/mem-recall.mjs'
 
@@ -321,10 +321,8 @@ function casesCLI([command, ...args]) {
     }
   } catch {}
   if (!source) return JSON.stringify({ state: 'denied' })
-  const words = args.filter((_, i) => i !== pos && i !== pos + 1)
-  if (querying) return caseResult(source, words.filter(arg => arg !== '--cases').join(' '))
-  const range = words.indexOf('--range')
-  return caseRead(source, words[0], range < 0 ? undefined : words[range + 1] ?? '')
+  args.splice(pos, 2)
+  return caseCommand(source, command, args)
 }
 
 const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href

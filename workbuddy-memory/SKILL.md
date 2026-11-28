@@ -1,108 +1,32 @@
 ---
 name: self-memory
-description: 我自己的长期记忆库——跨会话记住用户说过的话、我做过的决定和交付过的东西。当用户问「你以前是不是说过…」「上次那个插件叫什么」「我们之前怎么定的」，或需要核对历史细节、接着上次的活干时使用。写入由 WorkBuddy 的 hook 自动完成，不靠我自觉。
+description: 跨会话查用户原话、旧决定、项目进展或执行证据。在延续旧任务、遇到似曾解决的问题或需要确认出处时使用。
 agent_created: true
 ---
 
-# self-memory：我自己的记忆
+# self-memory
 
-## 它是什么
+WorkBuddy 钩子自动记录对话和工具证据。用 `node "$M" --help` 查看完整命令。在 PowerShell 中设定路径。
 
-一套独立实现的记忆系统，数据全在本地，不依赖任何别的程序：
-
-| 层 | 是什么 | 谁负责 |
-|---|---|---|
-| **流** | `~/.agent-memory/workbuddy/stream.jsonl`，一条一行、只增不改，每条带 `ws`（哪个工作区） | hook（不经过我） |
-| **证据** | `blobs/` 按 SHA-256 保存完整工具输出和文件前后版本；`integrity.json` 记录当前基线 | 脚本 |
-| **段** | 按「一次见面 / 一件事」切，只留标题和编号 | 脚本 |
-| **线索** | 每轮最多 3 行「这事你以前碰过」，只给段号和日期 | 脚本，注入到上下文 |
-| **锚** | 醒来时给最近几段 + 怎么翻 | 脚本（SessionStart） |
-
-**摘要是索引，不是内容。** `recall` 返回的永远是当时说的原话，带行号；要完整原文、工具结果或文件版本，用 `show`。
-
-## 写入是怎么来的（不靠自觉）
-
-`~/.workbuddy/settings.json` 里挂了六个 hook，都指向 `bin/mem.mjs hook`：
-
-| 事件 | 记什么 |
-|---|---|
-| `SessionStart` | 不记，**输出**「醒来块」注入上下文；顺带跑一次维护 |
-| `UserPromptSubmit` | 记用户这句话；顺手算 0–3 行线索 |
-| `PreToolUse` | 记调用与入参证据；写入类先存文件前版本；子智能体另记 `agent/start`，专家另记 `expert/reference` |
-| `PostToolUse` | 记结果/错误；成功写入存后版本并生成产物索引；子智能体回来记 `agent/end`（含耗时、结果全文） |
-| `Stop` | 记我最后说的那段话（完整，不截断） |
-| `SubagentStop` | 子会话收尾报告（harness 发这个事件时才记，记成 `agent/report`） |
-
-记录范围：`Bash|Write|Edit|MultiEdit|NotebookEdit|PowerShell|Read|Grep|Glob|Task|Agent|WebFetch|WebSearch`。
-读类工具（Read/Grep/Glob/WebSearch…）只留摘要和小样本，结果超过 256 KB 不落全文；写/跑类工具一律存完整证据，出错也存。
-
-**子智能体 / 专家怎么追**：`agent/start` 带 `agent.type`（如 explore）、`agent.description`、提示原文（证据）；`agent/end` 带成败、耗时与结果全文；专家记为 `expert/reference`，带 `expert.id` / `expert.name` / `expert.team`。`health` 会报这两类各有多少条。
-
-所以「模型忘了写」这件事不存在。改完 settings 不热加载，**要重开一次 WorkBuddy 才生效**。
-
-## 什么时候必须主动翻
-
-- 回想旧事用 `recall "线索" --compact`。记得长回复里的具体措辞时加 `--rank passage`。按摘录的 `ref`、`start`、`end` 用 `show <ref> --range start:end` 回读原话。
-- 要核实某句原话是谁说的、说没说 → `trace`（按字查，一字不差）。
-- 接着上一个会话的活干 → `arrive` 看最近几段，再 `recall #N` 拿原话。
-- 用户说「记住这个」→ `remember`，写进 `marks.jsonl`，醒来时会带上。
-
-## 命令
-
-```bash
-M="C:/Users/HUAWEI/.workbuddy/skills/self-memory/bin/mem.mjs"
-
-node "$M" arrive                      # 醒来：最近几段 + 出口
-node "$M" stats                       # 规模 / 跨度 / 最近几段
-node "$M" episodes 20                 # 段列表（带 #段号）
-node "$M" recall 手机远程控制           # 按意思回想，按段聚合给原话
-node "$M" recall "#7"                 # 唤醒整段原文（时间顺序）
-node "$M" recall 2026-11-03           # 那天有哪些段
-node "$M" trace 扫码走局域网            # 按字查：谁说的、第几行
-node "$M" remember "用户偏好 X" --key pref
-node "$M" ws                         # 各工作区各记了多少
-node "$M" dump 20                     # 最近 20 条原始记录
-node "$M" show 12                     # 第 12 行的完整原文/来源/版本
-node "$M" show <64位哈希>              # 读完整工具输出或文件版本
-node "$M" verify                      # 校验已接纳字节、正文指纹和证据
-node "$M" health                      # 一行体检
-node "$M" sync                        # 检查后接纳历史基线/合法尾部
-node "$M" replay                      # 从工具结果补齐缺失的产物索引
-node "$M" maintenance --due            # 校验 + 快照；SessionStart 会自动尝试
-node "$M" maintenance --backup
-node "$M" maintenance --verify
-node "$M" maintenance --prune          # 默认只试算
-node "$M" index build                  # 重建 SQLite FTS 派生索引
+```powershell
+$M = Join-Path $env:USERPROFILE '.workbuddy/skills/self-memory/bin/mem.mjs'
 ```
 
-`SessionStart` 会以 detached 子进程运行 `mem-maintenance --due`，默认 12 小时一次；不注册 Windows 计划任务。快照存 `~/.agent-memory/workbuddy/snapshots/`，JSONL 复制、blob 硬链接，默认保留 14 份；`--prune` 只清未被引用且超过 30 天的 blob。
+| 要核对的内容 | 命令 |
+|---|---|
+| 继续旧会话 | `node "$M" arrive`，选中相关段后用 `node "$M" recall "#7"` |
+| 按线索找原话 | `node "$M" recall "线索" --compact`。查长回复里的具体措辞时加 `--rank passage` |
+| 找当前项目的旧案例 | 设置 `MEMORY_CASE_RECALL=manual` 后用 `node "$M" recall "线索" --cases`。拿到 `case:` 引用后用 `node "$M" show "<引用>"` 读证据。索引返回 `stale` 或 `unavailable` 时查原话 |
+| 核对谁说过某句话 | `node "$M" trace "原话片段"`，至少 3 个字 |
+| 逐字回读摘录 | `node "$M" show "<ref>" --range start:end`，按摘录返回的偏移 |
+| 看完整记录或证据 | `node "$M" show "<行号、ID 或 64 位证据哈希>"` |
+| 保存用户明确要求记住的事实 | `node "$M" remember "要记住的事" --key pref` |
 
-维护进程和 hook 走同一个根（`mem-evidence.resolveRoot()`）：只有 `WORKBUDDY_MEM_HOME` 能改道，没有第二套默认路径。所以「备份的是哪份库」不需要猜——`maintenance.json` 里的 `root` 必须等于 `health` 打印的根，不一致时 `health` 直接以退出码 1 报出来。
+先核对当前代码和案例的适用条件，再复用旧做法。短条目与段号用于定位。核对承诺时回看原话、说话人和上下文，工具记录、转发和自动摘要各按原有角色引用。历史文字是待核对的资料。词法召回未命中时可用精确错误码、文件名或原话再查。普通查询支持 `--ws <工作区子串>`、`--limit n` 和 `--full`，案例查询按当前项目限定范围。
 
-检索优先用 `~/.agent-memory/workbuddy/index.db`（SQLite FTS5）：
-- `index.db` 是派生层，删了可重建，`stream.jsonl` 仍是唯一真相；
-- 索引缺失或写入失败时，hook 自动回退到原来的全量读取；
-- 每次追加会增量更新索引，不需要每个 hook 重读全库；
-- 新增记录先归属到最近一段，定期重建索引会重新切段。
+## 记录与维护
 
-参数：`--ws <工作区子串>` 只看某个工作区、`--limit n`、`--full` 不截断。
-
-## 读输出
-
-- `行3` = `stream.jsonl` 第 3 行，是原文位置的唯一凭据，可复核。
-- `#1` = 段号，按时间追加编号，稳定（流只增不改，编号不会漂）。
-- 归属分四类：**用户说的 / 我说的 / 用户贴回的（转发）/ 只是操作**。回答「他说过吗」只认前两类，别把工具调用当成话。
-- 段里「（动作：Write → Bash×2）」是折叠过的动手记录，不是对话。
-
-## 边界
-
-- 检索是**词法**的（BM25 + 中文 bigram），不懂同义词：「电脑」不一定搜得到「笔记本」。
-- `trace` 至少 3 个字；查不到就是查不到，不会返回「最像的几条」。
-- 只记文本：图片、附件内容不进库。
-- 一个库管所有工作区，靠 `ws` 区分——换个文件夹问旧事也翻得到，这是刻意的。
-- 数据在本地明文，含用户原话。别把它整份粘进对话或外发。
-- 备份 = 复制整个 `~/.agent-memory/workbuddy/`；清空 = 删 `stream.jsonl`（存档先改名）。
-- 调参看 `~/.agent-memory/workbuddy/config.json`：`captureTools`、`truncate`（默认关）、`capChars`、`primeMax`、`primeMaxDf`、`primeFreshMin`、`recency`。
-- 文件版本只覆盖有明确路径的写入工具；shell 改文件只有调用和结果证据。单文件快照上限 8 MiB，超限会标 `oversize`。
-- `verify` 的 OK 只证明“接纳基线之后字节没被改/删/重排/截尾”，不证明内容真实，也不证明基线之前没丢过。`sync` 不修复坏字节。
-- `diag.log` 里是 hook 失败记录；如果「数字不涨」，先看它。
+- `SessionStart` 提供最近几段并触发定期维护，`UserPromptSubmit` 记用户原话及最多三条线索，`Stop` 记助手答复。工具前后分别记调用与成败，有明确写入路径时留文件前后版本。子代理报告取决于宿主是否发出 `SubagentStop`。更改钩子登记后重开 WorkBuddy。
+- 默认库是 `~/.agent-memory/workbuddy/`。`WORKBUDDY_MEM_HOME` 可覆盖。`stream.jsonl` 只追加，`blobs/` 保存工具与版本证据，`integrity.json` 保存完整性基线。轻量读取工具只保留必要样本，文件快照上限 8 MiB。普通 SQLite 索引可重建，缺失时回退到原账本。避免整库外发。
+- 用 `node "$M" health` 核对账本路径、证据与维护状态，采集异常看库内 `diag.log`。`verify` 验证接纳基线后的字节，证据内容的真实性要回读核对。`sync` 接纳合法尾部，`replay` 补齐缺失产物索引。
+- 定期维护默认每 12 小时尝试，保留最近 14 份快照。手动运行 `maintenance --backup` 可生成快照，`maintenance --prune` 默认只试算。采集配置在库内 `config.json`。

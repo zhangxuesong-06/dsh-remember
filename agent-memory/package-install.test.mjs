@@ -58,6 +58,9 @@ test('OpenCode 从源码运行维护，运行时缓存只保存宿主模块', (t
   assert.ok(result.maintenance.snapshot)
   assert.ok(result.cacheFiles.includes('mem-plugin.mjs'))
   assert.ok(!result.cacheFiles.includes('mem-maintenance.mjs'))
+  assert.ok(!result.cacheFiles.includes('mem-core.mjs'))
+  assert.ok(!result.cacheFiles.includes('mem-journal.mjs'))
+  assert.ok(result.cacheFiles.includes('mem-runtime.mjs'))
 })
 
 test('Windows DSH 安装复用发布清单，升级移除开发文件并保留现有配置', { skip: process.platform !== 'win32' }, async (t) => {

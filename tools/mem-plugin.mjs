@@ -2,8 +2,8 @@ import { createCapture } from './mem-capture.mjs'
 import { injectBackground, injectBlock, excerpt, memoryPage } from './mem-context.mjs'
 import { caseSource, caseWatermark, searchCases, readEvidence, readCaseRef, startCaseSync } from './memory-case-index.mjs'
 import { mode, renderCards } from './memory-cards.mjs'
-import { buildHint, promptCue, testCue } from './memory-case-hint.mjs'
-import { sha256 } from './mem-journal.mjs'
+import { buildHint, openCodeTailPolicy, promptCue, testCue } from './memory-case-hint.mjs'
+import { sha256 } from './mem-journal-write.mjs'
 import { spawn } from 'node:child_process'
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -21,7 +21,7 @@ function currentRegression(project, test) {
 export async function setupMemory(ctx, core, maintenance = fileURLToPath(new URL('./mem-maintenance.mjs', import.meta.url))) {
   const ws = ctx.location?.directory || ''
   const cases = mode()
-  const source = cases === 'off' ? null : caseSource('opencode', core.ROOT, ws, { checkpointed: true })
+  const source = cases === 'off' ? null : caseSource('opencode', core.ROOT, ws, { tailPolicy: openCodeTailPolicy })
   const atProjectRoot = source?.project && source.project === realpathSync.native(ws)
   const auto = cases === 'auto' && atProjectRoot
   const capture = createCapture(core, ws, { caseTests: !!atProjectRoot })

@@ -397,7 +397,7 @@ async function compareTasks() {
       const trial = path.join(root, `${group}-${round}`)
       fs.cpSync(snapshot, trial, { recursive: true })
       assert.equal(createJournal(trial).sync().status, 'OK')
-      const trialSource = caseSource('opencode', trial, cwd, { checkpointed: true })
+      const trialSource = caseSource('opencode', trial, cwd)
       syncTrial(trialSource, true)
       env.OPENCODE_MEM_HOME = trial
       env.MEMORY_CASE_RECALL = mode
@@ -490,7 +490,7 @@ test('${testName}', () => {
     write(fixturePath, fullTask ? fixedPolicy : 'export default 1\n')
   }]])
   assert.deepEqual(records('tools').flatMap(row => row.caseTest ? [row.caseTest.passed] : []), [false, true])
-  const source = caseSource('opencode', ledger, cwd, { checkpointed: true })
+  const source = caseSource('opencode', ledger, cwd)
   assert.equal(runCaseSync(source).state, 'ready')
   assert.ok(searchCases(source, { cue: testName }).cards.some(card => card.status === 'verified'))
 

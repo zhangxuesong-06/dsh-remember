@@ -1124,6 +1124,7 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs stats                       规模 / 时间跨度 / 最近几段
   node mem.mjs episodes [n]                最近 n 段
   node mem.mjs recall <一句话|#段号|日期>   按意思回想 / 唤醒整段
+  node mem.mjs recall <线索> --cases       查当前项目的短条目（设置 MEMORY_CASE_RECALL=manual）
   node mem.mjs trace  <一句话>             按字查：谁说的、第几行
   node mem.mjs remember <要记住的事>       特意记下（--key 名字）
   node mem.mjs arrive                      醒来块
@@ -1131,6 +1132,7 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs dump [n]                    最近 n 条原始记录
   node mem.mjs show <行号|ID|证据哈希>      看完整原文 / 工具输出 / 文件版本
   node mem.mjs show <行号> --range start:end  原样回读摘录
+  node mem.mjs show <case:引用> [--range start:end]  回读案例证据
   node mem.mjs verify                      校验已接纳字节、正文指纹和证据
   node mem.mjs health                      一行体检
   node mem.mjs sync                        检查后接纳历史基线/合法尾部
@@ -1140,6 +1142,8 @@ if (!cmd || cmd === '-h' || cmd === '--help') {
   node mem.mjs maintenance --verify
   node mem.mjs maintenance --prune          默认只试算
   node mem.mjs index build                  重建派生检索索引（SQLite FTS）
+  node mem.mjs case-index-sync               同步短条目索引
+  node mem.mjs case-index-rebuild            从原账本重建短条目索引
 
   参数：--ws <工作区子串>  --limit n  --full  --compact  --rank passage
   数据：${STREAM}`)

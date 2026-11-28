@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { replacePackage } from '../agent-memory/tools/build-package.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.dirname(here)
@@ -18,17 +19,26 @@ const files = [
   ...['memory-cards.mjs', 'memory-case-index.mjs', 'tokenize.mjs'].map(name => 'dsh-memory/lib/' + name),
   'tools/mem-tokenize.mjs',
   ['dsh-memory/lib/mem-recall.mjs', 'tools/mem-recall.mjs'],
-  'tools/mem-journal.mjs',
+  'tools/mem-journal-write.mjs',
 ]
 
 export function buildMarketplace(root = defaultMarketplace) {
   const plugin = path.join(root, 'plugins', pluginName)
-  for (const file of files) {
-    const [source, target] = Array.isArray(file) ? file : [file, file]
-    const dest = path.join(plugin, target)
-    fs.mkdirSync(path.dirname(dest), { recursive: true })
-    fs.copyFileSync(path.join(repo, source), dest)
+  const installed = fs.lstatSync(plugin, { throwIfNoEntry: false })
+  if (installed?.isDirectory() && fs.readdirSync(plugin).length) {
+    const marker = path.join(plugin, '.codex-plugin', 'plugin.json')
+    if (!fs.existsSync(marker) || JSON.parse(fs.readFileSync(marker, 'utf8')).name !== pluginName) {
+      throw new Error(`Package output would replace an unrelated directory: ${plugin}`)
+    }
   }
+  replacePackage(plugin, (staging) => {
+    for (const file of files) {
+      const [source, target] = Array.isArray(file) ? file : [file, file]
+      const dest = path.join(staging, target)
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.copyFileSync(path.join(repo, source), dest)
+    }
+  })
   const manifest = path.join(root, '.agents', 'plugins', 'marketplace.json')
   fs.mkdirSync(path.dirname(manifest), { recursive: true })
   fs.writeFileSync(manifest, JSON.stringify({

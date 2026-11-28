@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createJournal, scanFile } from './mem-journal.mjs'
-import { verifyBlobs } from './mem-artifacts.mjs'
+import { verifyBlobs } from './mem-verify-blobs.mjs'
 import { caseSource, runCaseSync } from './memory-case-index.mjs'
 
 const SMALL = [

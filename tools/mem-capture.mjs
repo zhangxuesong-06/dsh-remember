@@ -1,5 +1,5 @@
 // Shared by live hooks and replay tests. All summaries point back to source rows.
-import { sha256 } from './mem-journal.mjs'
+import { sha256 } from './mem-journal-write.mjs'
 import { artifactPaths, snapshot, putBlob } from './mem-artifacts.mjs'
 import { excerpt } from './mem-context.mjs'
 import { tapPath, testObservation } from './memory-case-hint.mjs'

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { createJournal, scanFile } from '../tools/mem-journal.mjs'
-import { verifyBlobs as verifyOpenCodeBlobs } from '../tools/mem-artifacts.mjs'
+import { verifyBlobs as verifyOpenCodeBlobs } from '../tools/mem-verify-blobs.mjs'
 import { createIntegrity, scan, verifyBlobs as verifyDshBlobs } from '../dsh-memory/lib/evidence.mjs'
 import { RESTORE_ORIGIN_FILE } from '../dsh-memory/lib/memory-case-index.mjs'
 

@@ -12,7 +12,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { scanFile } from '../tools/mem-journal.mjs'
+import { scanFile } from '../tools/mem-journal-write.mjs'
 
 export function readStream(file) {
   try {

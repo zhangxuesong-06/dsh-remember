@@ -1,6 +1,37 @@
 import path from 'node:path'
-import { realpathSync } from 'node:fs'
-import { caseRef, key } from './memory-cards.mjs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { caseRef, digest, key } from './memory-cards.mjs'
+import { sameVersion, scopeOf, statID, toolGroup } from './memory-case-index.mjs'
+
+// OpenCode writes the current prompt and tool events before serving model input.
+export function openCodeTailPolicy(source, { watermark, current, pendingRecall }) {
+  if (!watermark && !pendingRecall) return
+  const checkpoint = JSON.parse(readFileSync(path.join(source.root, 'integrity.json'), 'utf8')).files
+  return ({ db, stream, prior, stat, remaining, readTail }) => {
+    const saved = checkpoint?.[stream + '.jsonl']
+    if (stat.size && (saved?.bytes !== stat.size || saved.identity !== statID(stat) || !sameVersion(stat, saved))) return false
+    if (!remaining || (!watermark && stream !== 'tools')) return
+    if (remaining > 16 * 1024) return false
+    const tail = readTail()
+    if (tail.at(-1) !== 10) return false
+    if (!watermark) {
+      // The journal proves the prefix. A new call cannot project a card without an existing group.
+      const row = JSON.parse(tail.toString('utf8'))
+      return saved?.previousSha256 === (prior?.prefix ?? digest('')) && row.phase === 'call'
+        && /^mem[._]recall$/.test(row.tool) && !!row.sid && !!row.callID && scopeOf(source, row) === source.project
+        && !db.prepare('SELECT 1 FROM events WHERE project=? AND group_id=? LIMIT 1')
+          .get(source.project, toolGroup(row.sid, row.callID))
+    }
+    for (const line of tail.toString('utf8').split('\n')) {
+      if (!line.trim()) continue
+      const row = JSON.parse(line)
+      if (['correction', 'withdrawal'].includes(row.kind || row.type)) return false
+      if (stream === 'tools' && row.caseTest
+        && (row.sid !== current?.sid || (row.turnID ?? row.turn) !== current?.turn)) return false
+    }
+    return true
+  }
+}
 
 const TEST_PATH = /^[\w./-]+\.(?:c|m)?js$/
 const SAFE_PATH = file => TEST_PATH.test(file || '') && !file.startsWith('/') && !file.split('/').includes('..')
