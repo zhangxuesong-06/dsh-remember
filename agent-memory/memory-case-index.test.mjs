@@ -11,6 +11,14 @@ import { caseRef, digest } from '../dsh-memory/lib/memory-cards.mjs'
 import { eventToRecords } from '../dsh-memory/lib/capture.mjs'
 import { Ledger } from '../dsh-memory/lib/store.mjs'
 
+function fullRanking(db, source) {
+  const project = 'p' + digest(source.project).slice(0, 32)
+  const match = cue => `project:${project} AND terms:(${cue.split(' ').map(word => 'x' + Buffer.from(word).toString('hex')).join(' OR ')})`
+  const query = db.prepare(`SELECT card FROM card_fts JOIN cards ON cards.fts_id = card_fts.rowid
+    WHERE card_fts MATCH ? ORDER BY bm25(card_fts), cards.rowid LIMIT ?`)
+  return { match, rank: (cue, limit) => query.all(match(cue), limit).map(row => JSON.parse(row.card)) }
+}
+
 test('改写远离游标的旧前缀并追加后，索引拒绝推进', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-case-prefix-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -159,19 +167,15 @@ test('按词数读取高频词，混合命中仍与完整 BM25 的结果一致',
   assert.equal(fs.readFileSync(path.join(root, 'memory-cases-codex-v2.sqlite'), 'utf8'), 'old index stays available to old code')
   const db = new DatabaseSync(path.join(root, 'memory-cases-codex-v3.sqlite'), { readOnly: true })
   try {
-    const project = 'p' + digest(source.project).slice(0, 32)
-    const match = cue => `project:${project} AND terms:(${cue.split(' ').map(word => 'x' + Buffer.from(word).toString('hex')).join(' OR ')})`
+    const { match, rank } = fullRanking(db, source)
     const query = db.prepare('SELECT rowid, terms FROM card_fts WHERE card_fts MATCH ? ORDER BY rowid LIMIT 8')
     assert.ok(query.all(match('shared')).every(row => row.terms.split(' ').length === 2))
-    const oracle = db.prepare(`SELECT card FROM card_fts JOIN cards ON cards.fts_id = card_fts.rowid
-      WHERE card_fts MATCH ? ORDER BY bm25(card_fts), cards.rowid LIMIT ?`)
     for (const cue of ['shared', 'shared dense', 'shared unique', 'replacement', 'unmatched', 'shared unknown',
       'shared sparse', 'shared dense sparse rare', 'dense sparse', 'shared dense replacement', 'shared dense unique',
       'unique shared dense', 'shared sparse unique', 'shared unknown sparse', 'dense sparse rare', 'aax bbx ccx',
       'shared dense unindexed one_unknown', 'shared unindexed one_unknown two_unknown', 'shared foreign_only']) {
       for (const limit of [1, 3, 8]) {
-        assert.deepEqual(searchCases(source, { cue, limit }).cards,
-          oracle.all(match(cue), limit).map(row => JSON.parse(row.card)), `${cue} (${limit})`)
+        assert.deepEqual(searchCases(source, { cue, limit }).cards, rank(cue, limit), `${cue} (${limit})`)
       }
     }
   } finally { db.close() }
@@ -219,27 +223,28 @@ test('四词完整共现不足时，候选分组仍保留完整 BM25 排序', t 
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const source = caseSource('codex', root, root)
   const rows = [
-    ['alpha-beta', 'alpha beta'],
-    ['alpha-gamma', 'alpha gamma'],
+    ['triple', 'alpha beta gamma filler'],
     ['alpha-delta', 'alpha delta'],
-    ['beta-gamma', 'beta gamma'],
     ['beta-delta', 'beta delta'],
     ['gamma-delta', 'gamma delta'],
-    ['alpha-only', 'alpha'],
-    ['beta-only', 'beta'],
-    ['gamma-only', 'gamma'],
-    ['delta-only', 'delta'],
   ]
+  for (const pair of ['alpha beta', 'alpha gamma', 'beta gamma']) {
+    for (let i = 0; i < 8; i++) rows.push([`${pair}-${i}`, pair])
+  }
+  for (let i = 0; i < 60; i++) rows.push([`delta-${i}`, 'delta'])
   fs.writeFileSync(path.join(root, 'stream.jsonl'),
     rows.map(([id, text]) => JSON.stringify({ id, kind: 'decision', ws: root, text })).join('\n') + '\n')
   assert.equal(syncCaseIndex(source).state, 'ready')
-  const oracle = searchCases(source, { cue: 'alpha beta gamma delta' })
-  const prepare = DatabaseSync.prototype.prepare
-  const SQL = t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
-    return prepare.call(this, sql)
-  })
-  assert.deepEqual(searchCases(source, { cue: 'alpha beta gamma delta' }), oracle)
-  assert.ok(SQL.mock.calls.some(call => call.arguments[0].includes('UNION ALL')))
+  const db = new DatabaseSync(path.join(root, 'memory-cases-codex-v3.sqlite'), { readOnly: true })
+  try {
+    const { rank } = fullRanking(db, source)
+    for (const limit of [1, 3, 8]) {
+      const cue = 'alpha beta gamma delta'
+      const expected = rank(cue, limit)
+      assert.equal(expected[0].summary, 'alpha beta gamma filler')
+      assert.deepEqual(searchCases(source, { cue, limit }), { state: 'ready', cards: expected })
+    }
+  } finally { db.close() }
 })
 
 test('五端入口查询同一格式，跨端授权撤销立即生效', t => {

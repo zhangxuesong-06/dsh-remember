@@ -427,15 +427,15 @@ export function searchCases(source, { cue = '', keys = [], watermark, current, l
           const [a, b] = words
           matches = [full, match(`${a} NOT ${b}`), match(`${b} NOT ${a}`)]
         } else {
-          // A top-N card is among the N shortest hits for all of its matching
-          // terms. Cards shorter than it with those terms already outrank it.
+          // Each exact match set can contribute a top-N card. Probe every
+          // subset because shorter partial matches can hide a stronger hit.
           const groups = new Set()
           const shortest = db.prepare(`SELECT terms ${byLength}`)
           for (let mask = 1; mask < (1 << words.length); mask++) {
-            const bits = mask.toString(2).split('0').join('').length
-            if (bits > 2) continue
             const subset = words.filter((_, index) => mask & (1 << index))
-            for (const { terms: text } of shortest.all(match(subset.join(' AND ')), count)) {
+            const expression = match(subset.join(' AND '))
+            if (groups.has(expression)) continue
+            for (const { terms: text } of shortest.all(expression, count)) {
               const present = text.split(' ')
               groups.add(match(words.filter(word => present.includes(word)).join(' AND ')))
             }
@@ -537,7 +537,7 @@ export function runCaseSync(source, rebuild = false, batches = 8) {
 }
 
 export function caseResult(source, cue, limit) {
-  return renderCards(mode() === 'off' ? { state: 'unavailable' } : searchCases(source, { cue }), limit)
+  return renderCards(mode() === 'off' ? unavailable() : searchCases(source, { cue }), limit)
 }
 
 export function caseRead(source, ref, range) {

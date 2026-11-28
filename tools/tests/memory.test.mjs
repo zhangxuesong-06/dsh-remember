@@ -351,6 +351,13 @@ test('模糊需求在读到回归锚点后、第一次修改前收到可回读�
   const cleanup = await setupMemory({ location: { directory: root }, session: { hook, context: async () => canonical },
     tool: { hook, transform: async (fn) => fn({ namespace() {}, add: tool => tools.push(tool) }) } }, core)
   t.after(cleanup)
+  const recallCases = () => tools.find(tool => tool.name === 'recall').execute({ query: name, cases: true })
+  const manual = await recallCases()
+  assert.ok(Buffer.byteLength(manual.content) <= 3072)
+  assert.ok(JSON.parse(manual.content).cards.some(card => card.status === 'verified'))
+  process.env.MEMORY_CASE_RECALL = 'off'
+  try { assert.equal((await recallCases()).content, manual.content) }
+  finally { process.env.MEMORY_CASE_RECALL = 'auto' }
   await hooks.prompt({ sessionID: 'new', messageID: 'new-user', prompt: { text: canonical[0].text } })
   const next = async () => {
     const event = { sessionID: 'new', messages: [{ role: 'user', content: canonical[0].text }], tools: {} }

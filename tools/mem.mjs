@@ -15,8 +15,7 @@ import * as core from './mem-core.mjs'
 import { createCapture } from './mem-capture.mjs'
 import { memoryPage } from './mem-context.mjs'
 import { recallFlags } from './mem-recall.mjs'
-import { caseSource, searchCases, readCaseRef } from './memory-case-index.mjs'
-import { mode, renderCards } from './memory-cards.mjs'
+import { caseRead, caseResult, caseSource } from './memory-case-index.mjs'
 const { append, mark, recall, trace, map, stats, readAll, readPins, readMarks, setPin, addAlias, readAliases, dayOf, buildAssocIndex, assocNeighbors, readAssoc, toolStats, compact, verify, health } = core
 
 const [cmd, ...rest] = process.argv.slice(2)
@@ -24,13 +23,11 @@ const caseLookup = () => caseSource('opencode', core.ROOT, process.cwd())
 
 if (cmd === 'recall' && rest.includes('--cases')) {
   const { text, flags } = parseArgs(rest.filter(arg => arg !== '--cases'))
-  const result = mode() === 'off' ? { state: 'unavailable' } : searchCases(caseLookup(), { cue: text })
-  console.log(renderCards(result, flags.n))
+  console.log(caseResult(caseLookup(), text, flags.n))
   process.exit(0)
 }
 if ((cmd === 'show' || cmd === 'read') && rest[0]?.startsWith('case:')) {
-  const result = mode() === 'off' ? { state: 'denied' } : readCaseRef(caseLookup(), rest[0], parseArgs(rest.slice(1)).flags.range)
-  console.log(JSON.stringify(result))
+  console.log(caseRead(caseLookup(), rest[0], parseArgs(rest.slice(1)).flags.range))
   process.exit(0)
 }
 
