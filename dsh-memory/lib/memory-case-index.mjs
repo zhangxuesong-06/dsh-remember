@@ -245,7 +245,7 @@ function initialize(db) {
   `)
 }
 
-function syncStream(source, prepare, stream, budget) {
+function syncStream(source, prepare, stream, budget, rebuild) {
   let fd
   try { fd = fs.openSync(streamFile(source, stream), 'r') } catch (error) {
     if (error.code === 'ENOENT' && !prepare('SELECT 1 FROM cursors WHERE stream=?').get(stream)) return { used: 0, pending: false }
@@ -254,7 +254,8 @@ function syncStream(source, prepare, stream, budget) {
   try {
     const stat = fs.fstatSync(fd)
     const prior = prepare('SELECT * FROM cursors WHERE stream=?').get(stream)
-    let offset = prior?.offset || 0
+    const initialOffset = prior?.offset || 0
+    let offset = initialOffset
     let skipping = prior?.skipping || 0
     let gaps = prior?.gaps || 0
     if (prior && (prior.identity !== statID(stat) || stat.size < prior.size
@@ -262,36 +263,46 @@ function syncStream(source, prepare, stream, budget) {
     if (stat.size === offset || budget === 0) return { used: 0, pending: stat.size > offset, gaps }
     const prefix = hashPrefix(fd, offset)
     if (prior && prefix.copy().digest('hex') !== prior.prefix) throw new Error('Stale source')
-    const bytes = read(fd, offset, Math.min(stat.size - offset, budget))
-    let start = 0
-    const allowEnd = offset + bytes.length === stat.size && restoredEnd(source, stream, stat.size)
-    while (start < bytes.length) {
-      const newline = bytes.indexOf(10, start)
-      if (newline === -1 && !allowEnd) break
-      const end = newline === -1 ? bytes.length : newline
-      const rowBytes = bytes.subarray(start, end)
-      if (!skipping && rowBytes.toString('utf8').trim()) {
-        let row
-        try { row = JSON.parse(rowBytes.toString('utf8').replace(/^\uFEFF/, '')) } catch { gaps++ }
-        if (row && typeof row === 'object') applyRow(prepare, mapRow(source, row, stream, offset + start, digest(rowBytes), rowBytes.length))
+    // A rebuild holds the same file and transaction across all batches.
+    let used = 0
+    do {
+      const bytes = read(fd, offset, Math.min(stat.size - offset, budget))
+      used += bytes.length
+      let start = 0
+      const allowEnd = offset + bytes.length === stat.size && restoredEnd(source, stream, stat.size)
+      while (start < bytes.length) {
+        const newline = bytes.indexOf(10, start)
+        if (newline === -1 && !allowEnd) break
+        const end = newline === -1 ? bytes.length : newline
+        if (!skipping) {
+          const rowBytes = bytes.subarray(start, end)
+          const text = rowBytes.toString('utf8')
+          let row
+          if (text.trim()) {
+            try { row = JSON.parse(text.replace(/^\uFEFF/, '')) } catch { gaps++ }
+          }
+          if (row && typeof row === 'object') applyRow(prepare, mapRow(source, row, stream, offset + start, digest(rowBytes), rowBytes.length))
+        }
+        skipping = 0
+        start = newline === -1 ? end : end + 1
       }
-      skipping = 0
-      start = newline === -1 ? end : end + 1
-    }
-    if (start === 0 && (skipping || bytes.length === BATCH)) {
-      if (!skipping) gaps++
-      skipping = 1
-      start = bytes.length
-    }
-    offset += start
-    prefix.update(bytes.subarray(0, start))
-    const current = fs.fstatSync(fd)
-    if (current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) {
+      if (start === 0 && (skipping || bytes.length === BATCH)) {
+        if (!skipping) gaps++
+        skipping = 1
+        start = bytes.length
+      }
+      if (rebuild && !start) throw new Error('Incomplete source during rebuild')
+      offset += start
+      prefix.update(bytes.subarray(0, start))
+    } while (rebuild && offset < stat.size)
+    const current = fs.statSync(streamFile(source, stream))
+    if (statID(current) !== statID(stat) || current.size !== stat.size
+      || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) {
       throw new Error('Source changed during indexing')
     }
     prepare('INSERT OR REPLACE INTO cursors VALUES (?,?,?,?,?,?,?,?,?)')
       .run(stream, statID(stat), offset, stat.size, stat.mtimeMs, stat.ctimeMs, prefix.digest('hex'), skipping, gaps)
-    return { used: bytes.length, progress: start, pending: stat.size > offset || !!skipping, gaps }
+    return { used, progress: offset - initialOffset, pending: stat.size > offset || !rebuild && !!skipping, gaps }
   } finally { fs.closeSync(fd) }
 }
 
@@ -315,14 +326,10 @@ export function syncCaseIndex(source, { rebuild = false } = {}) {
     let consumed = 0
     let progress = 0
     for (const stream of source.streams) {
-      let result
-      do {
-        result = syncStream(source, prepare, stream, budget)
-        consumed += result.used
-        progress += result.progress || 0
-        if (!rebuild) budget -= result.used
-        else if (result.pending && !result.progress) throw new Error('Incomplete source during rebuild')
-      } while (rebuild && result.pending && result.progress)
+      const result = syncStream(source, prepare, stream, budget, rebuild)
+      consumed += result.used
+      progress += result.progress || 0
+      if (!rebuild) budget -= result.used
       pending ||= result.pending
       gaps += result.gaps || 0
     }

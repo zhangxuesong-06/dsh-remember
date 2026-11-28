@@ -34,6 +34,67 @@ test('改写远离游标的旧前缀并追加后，索引拒绝推进', t => {
   assert.equal(searchCases(source, { keys: [], watermark: caseWatermark(source) }).state, 'stale')
 })
 
+test('全量重建跨批次顺序读取，保留旧引用和后续增量校验', t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'memory-case-rebuild-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const file = path.join(root, 'stream.jsonl')
+  const source = caseSource('codex', root, root)
+  const row = (id, text) => JSON.stringify({ id, kind: 'decision', text, ws: root }) + '\n'
+  const first = 'original exact\r\n  🙂'
+  fs.writeFileSync(file, row('first', first))
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  const ref = caseRef(searchCases(source, { cue: 'original' }).cards[0].evidence[0])
+  const large = row('large', 'x'.repeat(600_000))
+  fs.appendFileSync(file, '{invalid}\n' + large.repeat(6) + row('tail', 'tailword'))
+
+  const open = fs.openSync
+  const read = fs.readSync
+  let inputFD, readBytes = 0, appendDuringRead = false
+  const input = fs.realpathSync.native(file)
+  const openMock = t.mock.method(fs, 'openSync', (...args) => {
+    const fd = open(...args)
+    if (args[0] === input) inputFD = fd
+    return fd
+  })
+  const readMock = t.mock.method(fs, 'readSync', (fd, ...args) => {
+    const size = read(fd, ...args)
+    if (fd === inputFD) {
+      readBytes += size
+      if (appendDuringRead) {
+        appendDuringRead = false
+        fs.appendFileSync(file, row('concurrent', 'concurrentword'))
+      }
+    }
+    return size
+  })
+  try {
+    const size = fs.statSync(file).size
+    const result = syncCaseIndex(source, { rebuild: true })
+    assert.equal(result.state, 'ready')
+    assert.equal(result.pending, false)
+    assert.equal(result.progress, size)
+    assert.ok(readBytes >= size && readBytes < 2 * size, `read ${readBytes} bytes for a ${size}-byte stream`)
+    assert.equal(result.gaps, 1)
+    appendDuringRead = true
+    assert.equal(syncCaseIndex(source, { rebuild: true }).state, 'unavailable')
+    // The failed rebuild rolled back to the previous cursor and cards.
+    const db = new DatabaseSync(path.join(root, 'memory-cases-codex-v3.sqlite'), { readOnly: true })
+    try {
+      assert.equal(db.prepare('SELECT offset FROM cursors WHERE stream = ?').get('stream').offset, size)
+      assert.equal(db.prepare('SELECT count(*) AS count FROM cards').get().count, 3)
+    } finally { db.close() }
+  } finally {
+    readMock.mock.restore()
+    openMock.mock.restore()
+  }
+  assert.deepEqual(readCaseRef(source, ref), { state: 'exact', text: first })
+  fs.appendFileSync(file, row('new', 'newword'))
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  assert.equal(searchCases(source, { cue: 'tailword' }).cards[0].summary, 'tailword')
+  assert.equal(searchCases(source, { cue: 'concurrentword' }).cards[0].summary, 'concurrentword')
+  assert.equal(searchCases(source, { cue: 'newword' }).cards[0].summary, 'newword')
+})
+
 test('轮次超过保留上限后撤销旧案例的自动资格', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-case-overflow-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
