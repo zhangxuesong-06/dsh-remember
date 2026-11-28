@@ -10,6 +10,7 @@ import { caseSource, caseWatermark, readCaseRef, readEvidence, searchCases, sync
 import { caseRef, digest } from '../dsh-memory/lib/memory-cards.mjs'
 import { eventToRecords } from '../dsh-memory/lib/capture.mjs'
 import { Ledger } from '../dsh-memory/lib/store.mjs'
+import { createJournal } from '../tools/mem-journal.mjs'
 
 function fullRanking(db, source) {
   const project = 'p' + digest(source.project).slice(0, 32)
@@ -32,6 +33,25 @@ test('改写远离游标的旧前缀并追加后，索引拒绝推进', t => {
   assert.equal(syncCaseIndex(source).state, 'stale')
   assert.equal(searchCases(source, { cue: 'old rule' }).state, 'stale')
   assert.equal(searchCases(source, { keys: [], watermark: caseWatermark(source) }).state, 'stale')
+})
+
+test('手动案例回查拒绝改过的旧前缀和能补齐既有结果的调用', t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'case-pending-recall-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const file = path.join(root, 'tools.jsonl')
+  const journal = createJournal(root)
+  const source = caseSource('opencode', root, root, { checkpointed: true })
+  const result = { id: 'result', phase: 'completed', tool: 'mem_recall', sid: 'old', callID: 'unpaired', ws: root }
+  const recall = callID => journal.append('tools.jsonl', { ...result, id: callID, callID, phase: 'call' })
+  const search = () => searchCases(source, { cue: 'recall', pendingRecall: true })
+  fs.writeFileSync(file, JSON.stringify(result) + '\n')
+  assert.equal(syncCaseIndex(source).state, 'ready')
+  fs.writeFileSync(file, JSON.stringify({ ...result, tool: 'mem_xxxxxx' }) + '\n')
+  recall('fresh')
+  assert.equal(search().state, 'stale')
+  assert.equal(syncCaseIndex(source, { rebuild: true }).state, 'ready')
+  recall('unpaired')
+  assert.equal(search().state, 'stale')
 })
 
 test('全量重建跨批次顺序读取，保留旧引用和后续增量校验', t => {

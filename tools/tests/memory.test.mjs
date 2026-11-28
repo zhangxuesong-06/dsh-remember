@@ -358,6 +358,15 @@ test('模糊需求在读到回归锚点后、第一次修改前收到可回读�
   process.env.MEMORY_CASE_RECALL = 'off'
   try { assert.equal((await recallCases()).content, manual.content) }
   finally { process.env.MEMORY_CASE_RECALL = 'auto' }
+  await hooks['execute.before']({ sessionID: 'lookup', id: 'recall', tool: 'mem_recall', input: { query: name, cases: true } })
+  assert.equal((await recallCases()).content, manual.content, 'The lookup must tolerate capturing its own pending call')
+  await hooks['execute.before']({ sessionID: 'lookup', id: 'read', tool: 'read', input: { path: file } })
+  assert.equal(JSON.parse((await recallCases()).content).state, 'stale')
+  assert.equal(runCaseSync(caseSource('opencode', root, root)).state, 'ready')
+  await hooks['execute.before']({ sessionID: 'lookup', id: 'second-recall', tool: 'mem.recall', input: { query: name, cases: true } })
+  core.append({ kind: 'correction', who: 'user', ws: root, text: 'An unrelated unsynced correction' })
+  assert.equal(JSON.parse((await recallCases()).content).state, 'stale')
+  assert.equal(runCaseSync(caseSource('opencode', root, root)).state, 'ready')
   await hooks.prompt({ sessionID: 'new', messageID: 'new-user', prompt: { text: canonical[0].text } })
   const next = async () => {
     const event = { sessionID: 'new', messages: [{ role: 'user', content: canonical[0].text }], tools: {} }

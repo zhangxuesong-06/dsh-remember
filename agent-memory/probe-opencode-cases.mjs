@@ -1,10 +1,13 @@
 // Opt-in integration probe with synthetic files and either a scripted or local model.
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { once } from 'node:events'
 import fs from 'node:fs'
 import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { caseSource, readCaseRef, runCaseSync, searchCases } from '../dsh-memory/lib/memory-case-index.mjs'
@@ -14,14 +17,19 @@ import { createJournal, sha256 } from '../tools/mem-journal.mjs'
 const executable = process.argv[2]
 const compact = process.argv[3] === '--compact'
 const ollama = process.argv[3] === '--ollama' ? process.argv[4] : null
-const fullTask = process.argv[ollama ? 5 : 3] === '--full-task'
-if (!executable || !path.isAbsolute(executable) || process.argv.length !== (ollama ? (fullTask ? 6 : 5) : compact || fullTask ? 4 : 3)) {
-  console.error('Usage: node agent-memory/probe-opencode-cases.mjs <absolute opencode CLI path> [--compact | --full-task | --ollama <local model> [--full-task]]')
+const steady = process.argv[3] === '--steady'
+const repetitions = steady ? Number(process.argv[4]) : 1
+const fullTask = steady || process.argv[ollama ? 5 : 3] === '--full-task'
+const argCount = steady ? 5 : ollama ? (fullTask ? 6 : 5) : compact || fullTask ? 4 : 3
+if (!executable || !path.isAbsolute(executable) || process.argv.length !== argCount
+  || (steady && (process.platform !== 'win32' || !Number.isInteger(repetitions) || repetitions < 2 || repetitions > 20))) {
+  console.error('Usage: node agent-memory/probe-opencode-cases.mjs <absolute opencode CLI path> [--compact | --full-task | --ollama <local model> [--full-task] | --steady <2–20, Windows>]')
   process.exit(2)
 }
 
 const run = promisify(execFile)
-const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'case-opencode-')))
+const temporary = fs.realpathSync.native(os.tmpdir())
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(temporary, 'case-opencode-')))
 const mkdir = name => fs.mkdirSync(path.join(root, name))
 mkdir('project')
 mkdir('ledger')
@@ -38,15 +46,20 @@ const write = (name, content) => fs.writeFileSync(path.join(cwd, name), content)
 const env = { ...process.env, OPENCODE_MEM_HOME: ledger, MEMORY_CASE_RECALL: 'auto',
   MEMORY_DISABLE_MAINTENANCE: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1',
   OPENCODE_DISABLE_DEFAULT_PLUGINS: '1',
-  NO_PROXY: '127.0.0.1,localhost', PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH }
+  OPENCODE_SERVER_PASSWORD: randomUUID(), NO_PROXY: '127.0.0.1,localhost',
+  PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH }
 delete env.OPENCODE_CONFIG
 delete env.OPENCODE_CONFIG_DIR
 delete env.OPENCODE_CONFIG_CONTENT
 delete env.NODE_TEST_CONTEXT
-for (const name of ['data', 'config', 'cache', 'state']) {
-  mkdir(name)
-  env[`XDG_${name.toUpperCase()}_HOME`] = path.join(root, name)
+function isolateProfile(profile) {
+  for (const name of ['data', 'config', 'cache', 'state']) {
+    const directory = path.join(profile, name)
+    fs.mkdirSync(directory, { recursive: true })
+    env[`XDG_${name.toUpperCase()}_HOME`] = directory
+  }
 }
+isolateProfile(root)
 
 const records = (name, directory = ledger) =>
   fs.readFileSync(path.join(directory, `${name}.jsonl`), 'utf8').trimEnd().split('\n').map(JSON.parse)
@@ -59,7 +72,17 @@ let actions = []
 let sent = []
 let providerError
 let modelRequests
+let toolOutputs
 const allowedActions = new Set(['grep', 'read', 'mem_recall', 'mem_read', ...(fullTask ? ['write', 'shell'] : [])])
+const extractHint = text => text.match(/<memory-case>[\s\S]+?<\/memory-case>/)?.[0]
+
+function recordedToolJson(tool) {
+  const index = actions.findIndex(([name]) => name === tool)
+  assert.ok(index >= 0, `Missing scripted call to ${tool}`)
+  const content = toolOutputs.get(`call_probe_${index + 1}`)
+  assert.ok(content, `The provider did not receive the output of ${tool}`)
+  return JSON.parse(typeof content === 'string' ? content : content.map(part => part.text).join('\n'))
+}
 
 function allowedPolicy(content) {
   if (typeof content !== 'string' || content.length > 1024) return false
@@ -81,6 +104,10 @@ async function askOllama(body, hint) {
   const messages = body.messages.map(({ role, content, tool_calls, tool_call_id }) => {
     const message = { role, content: typeof content === 'string' ? content
       : (content || []).map(part => part.text || '').join('\n') }
+    if (process.env.MEMORY_PROBE_CONCRETE_ACTION === '1' && role === 'user' && hint) {
+      message.content = message.content.replace(hint, hint.replace('先核对当前入口是否仍受该回归覆盖。',
+        '下一步用 read 查看 export-policy.json，核对重试是否仍用 export_id 去重。'))
+    }
     if (tool_calls) message.tool_calls = tool_calls.map(call => {
       toolNames.set(call.id, call.function.name)
       return { function: { name: call.function.name, arguments: JSON.parse(call.function.arguments) } }
@@ -108,7 +135,12 @@ async function askOllama(body, hint) {
     return true
   })
   assert.ok(Number.isSafeInteger(answer.prompt_eval_count) && answer.prompt_eval_count > 0, 'Missing model input token count')
-  modelRequests.push({ input: answer.prompt_eval_count, cached: answer.prompt_eval_cached_count ?? null,
+  const forwarded = extractHint(messages.filter(message => message.role === 'user').map(message => message.content).join('\n'))
+  assert.equal(Boolean(forwarded), Boolean(hint))
+  const hintBytes = forwarded ? Buffer.byteLength(forwarded) + 2 : 0
+  assert.ok(hintBytes <= 512)
+  modelRequests.push({ hintBytes, concreteAction: forwarded?.includes('下一步用 read') ?? false,
+    input: answer.prompt_eval_count, cached: answer.prompt_eval_cached_count ?? null,
     output: answer.eval_count, finishReason: answer.done_reason ?? null, hint: !!hint,
     providerTools: body.tools?.map(tool => tool.function.name) || [],
     available, actions: calls.map(call => call.function),
@@ -124,11 +156,16 @@ const server = createServer(async (request, response) => {
   try {
     assert.equal(request.url, '/v1/chat/completions')
     const body = JSON.parse(await Array.fromAsync(request).then(chunks => Buffer.concat(chunks)))
+    if (toolOutputs) {
+      for (const message of body.messages) {
+        if (message.role === 'tool') toolOutputs.set(message.tool_call_id, message.content)
+      }
+    }
     const tools = (body.tools || []).map(tool => tool.function.name)
     const user = body.messages.filter(message => message.role === 'user')
     const matches = JSON.stringify(user).match(/<memory-case>/g) || []
     const text = user.flatMap(message => Array.isArray(message.content) ? message.content.map(part => part.text) : [message.content])
-    const hint = text.join('\n').match(/<memory-case>[\s\S]+?<\/memory-case>/)?.[0]
+    const hint = extractHint(text.join('\n'))
     assert.equal(matches.length, Number(!!hint))
     const model = modelRequests && await askOllama(body, hint)
     const action = tools.length > 0 ? actions[step++] : undefined
@@ -144,7 +181,7 @@ const server = createServer(async (request, response) => {
     } else if (action) {
       const [name, args, prepare] = action
       assert.ok(tools.includes(name), name)
-      prepare?.()
+      await prepare?.()
       send({ role: 'assistant', tool_calls: [{ index: 0, id: `call_probe_${step}`, type: 'function',
         function: { name, arguments: JSON.stringify(args) } }] })
       send({}, 'tool_calls')
@@ -159,15 +196,90 @@ const server = createServer(async (request, response) => {
   }
 })
 
-async function session(prompt, script) {
+async function sampleWorkingSet(pid, timeout) {
+  assert.ok(Number.isSafeInteger(pid) && pid > 0)
+  const sampler = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `
+    while ($target = Get-Process -Id ${pid} -ErrorAction SilentlyContinue) {
+      try {
+        $target.Refresh()
+        if ($target.HasExited) { break }
+        Write-Output "$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()),$($target.WorkingSet64),$($target.PeakWorkingSet64)"
+      } catch { break }
+      Start-Sleep -Milliseconds 50
+    }
+  `], { timeout, windowsHide: true })
+  sampler.child.stdin.end()
+  const { stdout } = await sampler
+  return stdout.trim().split(/\r?\n/).filter(Boolean).map(line => {
+    const [time, workingSet, peak] = line.split(',').map(Number)
+    return { time, workingSet, peak }
+  }).filter(sample => sample.time > 0 && sample.workingSet > 0 && sample.peak > 0)
+}
+
+function summarizeSamples(samples) {
+  assert.ok(samples.length, 'No OpenCode working-set samples in the measurement window')
+  return { count: samples.length, peakWorkingSet: Math.max(...samples.map(sample => sample.peak)),
+    maxSampledWorkingSet: Math.max(...samples.map(sample => sample.workingSet)) }
+}
+
+async function serveTrials(exercise) {
+  const child = spawn(executable, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd, env, windowsHide: true })
+  child.stdin.end()
+  const closed = once(child, 'close')
+  let log = ''
+  let timer
+  let samples
+  let result
+  let stopping = false
+  child.stdout.setEncoding('utf8')
+  child.stderr.resume()
+  try {
+    const address = await Promise.race([
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('OpenCode serve did not announce its loopback address')), 15_000)
+        child.stdout.on('data', chunk => {
+          log = (log + chunk).slice(-2048)
+          const address = log.match(/server listening on (http:\/\/127\.0\.0\.1:\d+)/)?.[1]
+          if (address) resolve(address)
+        })
+      }),
+      closed.then(([code]) => { throw new Error(`OpenCode serve exited before accepting trials (${code})`) }),
+    ])
+    clearTimeout(timer)
+    samples = sampleWorkingSet(child.pid, repetitions * 45_000 + 30_000).then(
+      values => stopping ? { values } : { error: new Error('OpenCode working-set sampler exited during the trials') },
+      error => ({ error }),
+    )
+    result = await exercise(address)
+  } finally {
+    clearTimeout(timer)
+    stopping = true
+    if (child.exitCode === null && child.signalCode === null) child.kill()
+    await closed
+    await samples
+  }
+  const { values, error } = await samples
+  if (error) throw error
+  return { ...result, samples: values }
+}
+
+async function session(prompt, script, address) {
   step = 0
   actions = script
   sent = []
+  toolOutputs = address && env.MEMORY_CASE_RECALL === 'manual' ? new Map() : null
+  let processStats
   try {
-    const pending = run(executable, ['run', '--standalone', '--model', fakeModel, prompt],
+    const connection = address ? ['--server', address] : ['--standalone']
+    const pending = run(executable, ['run', ...connection, '--model', fakeModel, prompt],
       { cwd, env, timeout: modelRequests ? 120_000 : 30_000, windowsHide: true })
     pending.child.stdin.end()
-    await pending
+    if (!address && pending.child.pid && process.platform === 'win32' && process.env.MEMORY_PROBE_RSS === '1') {
+      const [execution, samples] = await Promise.allSettled([pending, sampleWorkingSet(pending.child.pid, 130_000)])
+      if (execution.status === 'rejected') throw execution.reason
+      if (samples.status === 'rejected') throw samples.reason
+      processStats = summarizeSamples(samples.value)
+    } else await pending
   } catch (error) {
     const log = path.join(env.OPENCODE_MEM_HOME, 'diag.log')
     const diagnostics = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''
@@ -176,7 +288,28 @@ async function session(prompt, script) {
   }
   if (providerError) throw providerError
   if (!modelRequests) assert.equal(step, script.length + 1, 'Expected tool calls followed by one final model request')
-  return sent
+  return { hints: sent, processStats }
+}
+
+function syncTrial(source, rebuild = false) {
+  const result = runCaseSync(source, rebuild)
+  assertSynced(result)
+}
+
+function assertSynced(result) {
+  assert.equal(result.state, 'ready')
+  assert.equal(result.pending, false)
+}
+
+async function catchUpTrial(source) {
+  let result = runCaseSync(source)
+  // A session completion event can still be appending its episode when the
+  // client exits. Retry transient contention without rebuilding the ledger.
+  for (let attempt = 0; attempt < 4 && result.state === 'unavailable'; attempt++) {
+    await delay(50)
+    result = runCaseSync(source)
+  }
+  assertSynced(result)
 }
 
 async function compareTasks() {
@@ -187,13 +320,8 @@ async function compareTasks() {
     ? `读 ${testPath} 和 ${policyPath}，用 write 修改 ${policyPath}，不要修改测试。用 shell 执行 ${command} 确认回归。历史证据相关时可以用记忆工具核对。`
     : '这是只读核查，请说明在修改代码前应确认哪个条件，有历史证据时可以用记忆工具核对。')
   const initial = fullTask ? sha256(Buffer.concat([fs.readFileSync(path.join(cwd, testPath)), Buffer.from(failingPolicy)])) : null
-  for (const [group, mode] of [['baseline', 'off'], ['manual', 'manual'], ['auto', 'auto']]) {
-    const trial = path.join(root, group)
-    fs.cpSync(snapshot, trial, { recursive: true })
-    assert.equal(createJournal(trial).sync().status, 'OK')
-    assert.equal(runCaseSync(caseSource('opencode', trial, cwd), true).state, 'ready')
-    env.OPENCODE_MEM_HOME = trial
-    env.MEMORY_CASE_RECALL = mode
+  async function compareTrial(trial, group, mode, address, source) {
+    const previousEvents = fullTask ? records('tools', trial).length : 0
     if (fullTask) write(policyPath, failingPolicy)
     modelRequests = ollama ? [] : undefined
     const script = ollama ? [] : [
@@ -202,13 +330,26 @@ async function compareTasks() {
       ['write', { path: policyPath, content: fixedPolicy }],
       ['shell', { command, workdir: cwd, timeout: 5000 }],
     ]
+    if (steady && mode === 'manual') {
+      const readArgs = { ref: '' }
+      // Maintenance is disabled, so catch up the append-only capture before
+      // issuing the normal manual search, which requires a fresh index.
+      script.splice(2, 0, ['mem_recall', { query: testName, cases: true }, () => catchUpTrial(source)],
+        ['mem_read', readArgs, () => {
+          const result = recordedToolJson('mem_recall')
+          assert.equal(result.state, 'ready')
+          const verified = result.cards.find(card => card.status === 'verified' && card.test.name === testName)
+          assert.ok(verified)
+          readArgs.ref = verified.evidence.at(-1).ref
+        }])
+    }
     const started = performance.now()
-    const hints = await session(prompt, script)
+    const { hints, processStats } = await session(prompt, script, address)
     const report = { group, model: ollama, inputTokens: modelRequests?.reduce((total, request) => total + request.input, 0) ?? null,
       outputTokens: modelRequests?.reduce((total, request) => total + (request.output || 0), 0) ?? null, requests: modelRequests }
     if (fullTask) {
       const elapsedMs = Math.round(performance.now() - started)
-      const outcomes = records('tools', trial).slice(records('tools', snapshot).length)
+      const outcomes = records('tools', trial).slice(previousEvents)
       const firstWrite = outcomes.findIndex(row => row.phase === 'call' && row.tool === 'write')
       const writeRequest = modelRequests
         ? modelRequests.filter(request => request.available.length).findIndex(request => request.accepted.includes('write'))
@@ -236,13 +377,54 @@ async function compareTasks() {
       if (!ollama) {
         assert.ok(report.checkedPolicyBeforeWrite && report.policyChanged && report.testPassed, JSON.stringify(report))
         assert.equal(report.sessionTestCalls, 1)
-        assert.equal(report.hintBeforeWrite, mode === 'auto')
+        assert.equal(report.hintBeforeWrite, mode === 'auto', JSON.stringify(report))
+        if (steady && mode === 'manual') {
+          const result = recordedToolJson('mem_read')
+          assert.equal(result.state, 'exact')
+          assert.match(JSON.parse(result.text).output.output, /^# pass 1$/m)
+          report.exactEvidence = true
+        }
       }
     }
-    console.log(JSON.stringify(report))
+    if (processStats) report.processStats = processStats
+    return report
+  }
+
+  const groups = [['baseline', 'off'], ['manual', 'manual'], ['auto', 'auto']]
+  for (let round = 0; round < (steady ? groups.length : 1); round++) {
+    const order = groups.slice(round).concat(groups.slice(0, round))
+    for (const [group, mode] of order) {
+      const trial = path.join(root, `${group}-${round}`)
+      fs.cpSync(snapshot, trial, { recursive: true })
+      assert.equal(createJournal(trial).sync().status, 'OK')
+      const trialSource = caseSource('opencode', trial, cwd, { checkpointed: true })
+      syncTrial(trialSource, true)
+      env.OPENCODE_MEM_HOME = trial
+      env.MEMORY_CASE_RECALL = mode
+      if (!steady) {
+        console.log(JSON.stringify(await compareTrial(trial, group, mode)))
+        continue
+      }
+      isolateProfile(path.join(trial, 'profile'))
+      const { warmUntil, end, trials, samples } = await serveTrials(async address => {
+        await compareTrial(trial, group, mode, address, trialSource)
+        const warmUntil = Date.now()
+        const trials = []
+        for (let repeat = 1; repeat < repetitions; repeat++) {
+          // The probe disables maintenance. Catch up between sessions so each
+          // turn starts with the same index freshness as the first turn.
+          await catchUpTrial(trialSource)
+          trials.push(await compareTrial(trial, group, mode, address, trialSource))
+        }
+        return { warmUntil, end: Date.now(), trials }
+      })
+      const processStats = summarizeSamples(samples.filter(sample => sample.time >= warmUntil && sample.time <= end))
+      console.log(JSON.stringify({ round: round + 1, group, warmups: 1, processStats, trials }))
+    }
   }
 }
 
+let probeFailed = false
 try {
   await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
   if (compact) {
@@ -320,7 +502,7 @@ test('${testName}', () => {
       for (const suffix of ['', ' again']) inspect.push(['grep', { pattern: compactCue + suffix, include: '*.mjs' }])
     }
     inspect.push(['write', { path: marker, content: 'synthetic write\n' }])
-    const hints = await session('导出断了再点别多一份', inspect)
+    const { hints } = await session('导出断了再点别多一份', inspect)
     assert.equal(hints[0], undefined)
     assert.ok(hints[1]?.includes(testName), 'The provider request after grep must contain the case, before write')
     const sizes = hints.filter(Boolean).map(hint => Buffer.byteLength(hint) + 2)
@@ -340,7 +522,7 @@ test('${testName}', () => {
     assert.equal(evidence.state, 'exact')
     assert.match(JSON.parse(evidence.text).output.output, /^# pass 1$/m)
     assert.equal(runCaseSync(source).state, 'ready')
-    const afterWrite = await session('导出断了再点别多一份', [
+    const { hints: afterWrite } = await session('导出断了再点别多一份', [
       ['write', { path: marker, content: 'synthetic early write\n' }], inspect[0],
     ])
     assert.deepEqual(afterWrite, [undefined, undefined, undefined], 'Skip a first hint after a write')
@@ -349,8 +531,17 @@ test('${testName}', () => {
     console.log(JSON.stringify({ shellExits: [1, 0], hintBytes: Buffer.byteLength(hints[1]), receivedBeforeWrite: true,
       compactions: compact ? 2 : 0, silentAfterWrite: true, exactEvidence: true, canonicalHistoryClean: true }))
   }
+} catch (error) {
+  probeFailed = true
+  throw error
 } finally {
   server.closeAllConnections()
   server.close()
-  fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+  try {
+    assert.equal(path.dirname(fs.realpathSync.native(root)), temporary)
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+  } catch (error) {
+    if (!probeFailed) throw error
+    console.error(`OpenCode probe cleanup failed: ${error.message}`)
+  }
 }

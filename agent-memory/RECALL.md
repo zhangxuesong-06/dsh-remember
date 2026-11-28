@@ -57,6 +57,8 @@ OpenCode 的 `auto` 是试验开关。插件只在当前项目根的任务开始
 
 `--full-task` 用脚本化提供方验证读取当前配置、修改合成文件和运行测试的整条路径。`--ollama "<本机已安装的模型>" --full-task` 在回环 Ollama 上以同一合成快照运行现有召回、手动短条目和自动提示三组。省略 `--full-task` 时，Ollama 模式运行只读诊断。每组记录实际模型请求、工具调用、提示是否到达、修改前是否核对当前配置、最终文件和独立测试结果。工具调用与测试结果取自宿主证据及本机复跑。三组都使用直接工具定义，所有探针使用临时配置、账本和项目。单题结果用于诊断，正式三组对照规则见下文。
 
+Windows 上加 `--steady 6` 可用同一个探针测试常驻 `opencode serve`。三轮轮换组序，每组启动独立的隔离服务，预热一个任务后连续测五个任务。手动组实际调用短条目查询与逐字回读，自动组核对首次写入前的送达。`maxSampledWorkingSet` 是预热后工作集采样最大值，`peakWorkingSet` 是 Windows 记录的进程寿命峰值，可能包含预热。维护进程、CLI 客户端和模型提供方的内存不计入宿主数据。这个模式使用脚本化提供方。
+
 OpenCode 可用 `node tools/mem-maintenance.mjs --root "<账本目录>" --case-index-sync` 或 `--case-index-rebuild` 维护案例索引。其余四端在上述 CLI 使用 `case-index-sync` 或 `case-index-rebuild`，DSH 在命令后附工作区。升级 v3 后从源账本生成新版索引，首次回填期间可能返回 `unavailable` 或 `stale`。v2 派生文件留给旧版回退，原有 `case:` 引用可以继续回读。关闭试验时设 `MEMORY_CASE_RECALL=off` 或清除这个变量。日常原文查询仍可访问源账本。
 
 ### 三组模型对照

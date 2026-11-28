@@ -290,7 +290,9 @@ async function registerMemoryTools(ctx, core, ws, source) {
       compact: { type: 'boolean', description: '只返回限量摘录、角色和原文位置。' },
       ...(source ? { cases: { type: 'boolean', description: '查当前项目的短条目和证据引用。' } } : {}),
     }, ['query'], async (input) => {
-      if (source && input.cases) return { content: renderCards(searchCases(source, { cue: input.query }), input.n) }
+      if (source && input.cases) {
+        return { content: renderCards(searchCases(source, { cue: input.query, pendingRecall: true }), input.n) }
+      }
       if (input.passage || input.compact) {
         return { content: core.recallQuotes(input.query, { n: input.n, scope: input.scope, passages: input.passage }) }
       }

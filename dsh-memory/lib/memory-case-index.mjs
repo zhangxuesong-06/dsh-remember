@@ -155,6 +155,7 @@ function mapRow(source, row, stream, offset, hash, bytes) {
 const terms = text => [...new Set(tokenize(String(text).slice(0, 2048)))].slice(0, 64)
 const encoded = word => 'x' + Buffer.from(word).toString('hex')
 const projectTerm = project => 'p' + digest(project).slice(0, 32)
+const toolGroup = (sid, call, id) => key('tool', sid, sid && call ? call : id)
 
 function saveCard(prepare, project, card) {
   if (!card) return
@@ -194,7 +195,7 @@ function applyRow(prepare, event) {
   const values = prepare('SELECT event FROM events WHERE project=? AND group_id=? ORDER BY ts DESC, id DESC LIMIT 65')
   const groupEvents = group => values.all(project, group).map(row => JSON.parse(row.event))
   if (kind === 'call' || kind === 'result') {
-    const group = key('tool', sid, sid && data.call ? data.call : id)
+    const group = toolGroup(sid, data.call, id)
     put.run(project, group, id, event.ts, JSON.stringify(event))
     const events = groupEvents(group)
     if (events.length <= 64) {
@@ -348,8 +349,8 @@ export function caseWatermark(source) {
   }))
 }
 
-function fresh(source, db, watermark, current) {
-  const checkpoint = watermark && source.checkpointed
+function fresh(source, db, watermark, current, pendingRecall) {
+  const checkpoint = (watermark || pendingRecall) && source.checkpointed
     ? JSON.parse(fs.readFileSync(path.join(sourceRoot(source), 'integrity.json'), 'utf8')).files : null
   for (const stream of source.streams) {
     const prior = db.prepare('SELECT * FROM cursors WHERE stream=?').get(stream)
@@ -360,17 +361,28 @@ function fresh(source, db, watermark, current) {
       const stat = fs.fstatSync(fd)
       if (prior && (statID(stat) !== prior.identity || stat.size < prior.size
         || (stat.size === prior.size && (stat.mtimeMs !== prior.mtime || stat.ctimeMs !== prior.ctime)))) return false
-      if (!watermark && stat.size > (prior?.size || 0)) return false
+      const checkTail = watermark || (pendingRecall && stream === 'tools')
+      if (!checkTail && stat.size > (prior?.size || 0)) return false
+      const saved = checkpoint?.[stream + '.jsonl']
       if (checkpoint && stat.size) {
-        const saved = checkpoint[stream + '.jsonl']
         if (saved?.bytes !== stat.size || saved.identity !== statID(stat)
           || saved.mtime !== stat.mtimeMs || saved.ctime !== stat.ctimeMs) return false
       }
-      if (watermark && stat.size > (prior?.offset || 0)) {
+      if (checkTail && stat.size > (prior?.offset || 0)) {
         const offset = prior?.offset || 0
         if (stat.size - offset > 16 * 1024) return false
         const tail = read(fd, offset, stat.size - offset)
         if (tail.at(-1) !== 10) return false
+        if (!watermark) {
+          const row = JSON.parse(tail.toString('utf8'))
+          // The journal proves the preceding bytes without rereading them.
+          // A new call cannot project a card unless its group already exists.
+          if (saved?.previousSha256 !== (prior?.prefix ?? digest('')) || row.phase !== 'call'
+            || !/^mem[._]recall$/.test(row.tool) || !row.sid || !row.callID || scopeOf(source, row) !== source.project
+            || db.prepare('SELECT 1 FROM events WHERE project=? AND group_id=? LIMIT 1')
+              .get(source.project, toolGroup(row.sid, row.callID))) return false
+          continue
+        }
         for (const line of tail.toString('utf8').split('\n')) {
           if (!line.trim()) continue
           const row = JSON.parse(line)
@@ -386,13 +398,13 @@ function fresh(source, db, watermark, current) {
   return true
 }
 
-export function searchCases(source, { cue = '', keys = [], watermark, current, limit = 8 } = {}) {
+export function searchCases(source, { cue = '', keys = [], watermark, current, limit = 8, pendingRecall = false } = {}) {
   if (!source.project) return unavailable()
   const count = Math.max(1, Math.min(8, Number(limit) || 8))
   let db
   try {
     db = open(source, true)
-    if (!fresh(source, db, watermark, current)) return stale()
+    if (!fresh(source, db, watermark, current, pendingRecall && source.adapter === 'opencode' && source.checkpointed)) return stale()
     if (watermark) {
       const lookup = db.prepare('SELECT id FROM auto_keys WHERE project=? AND key=? LIMIT 9')
       const ids = new Set(keys.slice(0, 4).flatMap(value => lookup.all(source.project, value).map(row => row.id)))

@@ -163,6 +163,7 @@ export function createJournal(root) {
       try { fs.writeFileSync(fd, line); fs.fsyncSync(fd); stat = fs.fstatSync(fd) } finally { fs.closeSync(fd) }
       const bytes = Buffer.concat([d.bytes, line])
       state.files[name] = { bytes: bytes.length, sha256: sha256(bytes), records: d.rows.length + 1,
+        ...(name === 'tools.jsonl' ? { previousSha256: state.files[name].sha256 } : {}),
         ...stamp(stat),
         baselineAt: state.files[name]?.baselineAt || new Date().toISOString() }
       atomicWrite(checkpoint, state)
